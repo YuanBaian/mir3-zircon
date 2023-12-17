@@ -556,7 +556,7 @@ namespace Client.Envir
                     }
 
                     login.Dispose();
-                    DXSoundManager.Stop(SoundIndex.LoginScene);
+                    DXSoundManager.Stop(SoundIndex.LoginScene2);
                     DXSoundManager.Play(SoundIndex.SelectScene);
 
                     p.Characters.Sort((x1, x2) => x2.LastLogin.CompareTo(x1.LastLogin));
@@ -1092,36 +1092,44 @@ namespace Client.Envir
             {
                 if (ob.ObjectID != p.ObjectID) continue;
 
-                if (ob == MapObject.User) //{
+                if (ob == MapObject.User)
                 {
                     if (GameScene.Game.MapControl.FishingState != FishingState.None)
                         GameScene.Game.MapControl.FishingState = FishingState.Cancel;
 
                     GameScene.Game.CanRun = false;
-                    //   MapObject.User.NextRunTime = CEnvir.Now.AddMilliseconds(600);
-                    //MapObject.User.NextActionTime = CEnvir.Now.AddMilliseconds(300);
+                    
+                    if (GameScene.Game.StruckEnabled)
+                    {
+                        MapObject.User.NextRunTime = CEnvir.Now.AddMilliseconds(600);
+                        MapObject.User.NextActionTime = CEnvir.Now.AddMilliseconds(300);
 
-                    /* if (MapObject.User.ServerTime > DateTime.MinValue) //fix desyncing attack timers and being struck
-                     {
-                         switch (MapObject.User.CurrentAction)
-                         {
-                             case MirAction.Attack:
-                             case MirAction.RangeAttack:
-                                 MapObject.User.AttackTime += TimeSpan.FromMilliseconds(300);
-                                 break;
-                             case MirAction.Spell:
-                                 MapObject.User.NextMagicTime += TimeSpan.FromMilliseconds(300);
-                                 break;
-                         }
-                     }*/
+                        if (MapObject.User.ServerTime > DateTime.MinValue) //fix desyncing attack timers and being struck
+                        {
+                            switch (MapObject.User.CurrentAction)
+                            {
+                                case MirAction.Attack:
+                                case MirAction.RangeAttack:
+                                    MapObject.User.AttackTime += TimeSpan.FromMilliseconds(300);
+                                    break;
+                                case MirAction.Spell:
+                                    MapObject.User.NextMagicTime += TimeSpan.FromMilliseconds(300);
+                                    break;
+                            }
+                        }
+                    }
                 }
 
-                //   Point loc = ob.ActionQueue.Count > 0 ? ob.ActionQueue[ob.ActionQueue.Count - 1].Location : ob.CurrentLocation;
+                if (GameScene.Game.StruckEnabled)
+                {
+                    Point loc = ob.ActionQueue.Count > 0 ? ob.ActionQueue[^1].Location : ob.CurrentLocation;
 
-                // ob.ActionQueue.Add(new ObjectAction(MirAction.Struck, p.Direction, loc, p.AttackerID, p.Element));
-
-                ob.Struck(p.AttackerID, p.Element);
-
+                    ob.ActionQueue.Add(new ObjectAction(MirAction.Struck, p.Direction, loc, p.AttackerID, p.Element));
+                }
+                else
+                {
+                    ob.Struck(p.AttackerID, p.Element);
+                }
                 return;
             }
         }
@@ -1164,6 +1172,7 @@ namespace Client.Envir
                 return;
             }
         }
+
         public void Process(S.ObjectMining p)
         {
             if (MapObject.User.ObjectID == p.ObjectID && !GameScene.Game.Observer)
@@ -1228,6 +1237,7 @@ namespace Client.Envir
                 MapObject.User.MagicLocations = p.Locations;
                 MapObject.User.MagicCast = p.Cast;
                 MapObject.User.NextActionTime += p.Slow;
+                MapObject.User.AttackElement = p.AttackElement;
                 return;
             }
 
@@ -1235,7 +1245,7 @@ namespace Client.Envir
             {
                 if (ob.ObjectID != p.ObjectID) continue;
 
-                ob.ActionQueue.Add(new ObjectAction(MirAction.Spell, p.Direction, p.CurrentLocation, p.Type, p.Targets, p.Locations, p.Cast));
+                ob.ActionQueue.Add(new ObjectAction(MirAction.Spell, p.Direction, p.CurrentLocation, p.Type, p.Targets, p.Locations, p.Cast, p.AttackElement));
                 return;
             }
         }
@@ -1263,18 +1273,25 @@ namespace Client.Envir
             {
                 case MagicType.ChainLightning:
                     {
-                        foreach (Point point in locations)
+                        if (locations.Count > 0)
+                            DXSoundManager.Play(SoundIndex.ChainLightningEnd);
+                    }
+                    break;
+                case MagicType.LightningStrike:
+                    {
+                        foreach (MapObject attackTarget in targets)
                         {
-                            spell = new MirEffect(830, 6, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx, 50, 80, Globals.LightningColour)
+                            source.Effects.Add(spell = new MirProjectile(500, 8, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx6, 35, 35, Globals.LightningColour, source.CurrentLocation)
                             {
                                 Blend = true,
-                                MapTarget = point,
-                            };
+                                Target = attackTarget,
+                                Skip = 0
+                            });
                             spell.Process();
                         }
 
-                        if (locations.Count > 0)
-                            DXSoundManager.Play(SoundIndex.ChainLightningEnd);
+                        if (targets.Count > 0)
+                            DXSoundManager.Play(SoundIndex.LightningBeamEnd);
                     }
                     break;
                 case MagicType.FireBounce:
@@ -1364,6 +1381,15 @@ namespace Client.Envir
                         });
 
                         DXSoundManager.Play(SoundIndex.TeleportIn);
+                        break;
+                    case Effect.ThunderBolt:
+                        ob.Effects.Add(new MirEffect(1450, 3, TimeSpan.FromMilliseconds(150), LibraryFile.Magic, 150, 50, Globals.LightningColour)
+                        {
+                            Blend = true,
+                            Target = ob
+                        });
+
+                        DXSoundManager.Play(SoundIndex.LightningStrikeEnd);
                         break;
                     case Effect.FullBloom:
                         ob.Effects.Add(new MirEffect(1700, 4, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx4, 30, 60, Color.White)
@@ -1456,22 +1482,8 @@ namespace Client.Envir
                             BlendRate = 0.6F
                         });
                         break;
-                    #region Thunder Bolt & Thunder Strike
-
-                    case Effect.ThunderBolt:
-
-                        ob.Effects.Add(new MirEffect(1450, 3, TimeSpan.FromMilliseconds(150), LibraryFile.Magic, 150, 50, Globals.LightningColour)
-                        {
-                            Blend = true,
-                            Target = ob
-                        });
-
-                        DXSoundManager.Play(SoundIndex.LightningStrikeEnd);
-                        break;
-
-                    #endregion
                     case Effect.DanceOfSwallow:
-                        ob.Effects.Add(new MirEffect(1300, 8, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx4, 20, 70, Globals.NoneColour) //Element style?
+                        ob.Effects.Add(new MirEffect(1300, 8, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx4, 20, 70, Globals.NoneColour)
                         {
                             Blend = true,
                             Target = ob,
@@ -1480,7 +1492,7 @@ namespace Client.Envir
                         DXSoundManager.Play(SoundIndex.DanceOfSwallowsEnd);
                         break;
                     case Effect.FlashOfLight:
-                        ob.Effects.Add(new MirEffect(2400, 5, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx4, 20, 70, Globals.NoneColour) //Element style?
+                        ob.Effects.Add(new MirEffect(2400, 5, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx4, 20, 70, Globals.NoneColour)
                         {
                             Blend = true,
                             Target = ob,
@@ -1498,6 +1510,15 @@ namespace Client.Envir
 
                         //DXSoundManager.Play(SoundIndex.FlashOfLightEnd);
                         break;
+                    case Effect.ParasiteExplode:
+                        ob.Effects.Add(new MirEffect(700, 7, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx5, 30, 60, Globals.NoneColour)
+                        {
+                            Target = ob,
+                            Blend = true
+                        });
+
+                        DXSoundManager.Play(SoundIndex.ParasiteExplode);
+                        break;
                     case Effect.FrostBiteEnd:
                         ob.Effects.Add(new MirEffect(700, 7, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx5, 30, 60, Globals.IceColour)
                         {
@@ -1507,6 +1528,19 @@ namespace Client.Envir
                         });
 
                         DXSoundManager.Play(SoundIndex.FireStormEnd);
+                        break;
+                    case Effect.ChainOfFireExplode:
+                        var effect = new MirEffect(600, 12, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx10, 30, 60, Globals.FireColour)
+                        {
+                            Target = ob,
+                            Blend = true
+                        };
+
+                        effect.FrameIndexAction = () =>
+                        {
+                            if (effect.FrameIndex == 8)
+                                DXSoundManager.Play(SoundIndex.ChainofFireExplode);
+                        };
                         break;
                     default:
                         throw new ArgumentOutOfRangeException();
@@ -1537,6 +1571,47 @@ namespace Client.Envir
 
                     DXSoundManager.Play(SoundIndex.SummonShinsuEnd);
                     break;
+                case Effect.MirrorImage:
+                    new MirEffect(1280, 10, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx2, 30, 60, Globals.NoneColour)
+                    {
+                        MapTarget = p.Location,
+                        Blend = true,
+                    };
+
+                    DXSoundManager.Play(SoundIndex.SummonSkeletonEnd);
+                    break;
+                case Effect.CursedDoll:
+                    new MirEffect(700, 13, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx3, 30, 60, Globals.NoneColour)
+                    {
+                        MapTarget = p.Location,
+                        Blend = true,
+                    };
+                    
+                    DXSoundManager.Play(SoundIndex.CursedDollEnd);
+                    break;
+                case Effect.UndeadSoul:
+                    new MirEffect(3300, 10, TimeSpan.FromMilliseconds(100), LibraryFile.MonMagicEx20, 35, 10, Globals.NoneColour)
+                    {
+                        MapTarget = p.Location,
+                        Blend = true,
+                    };
+                    new MirEffect(400, 13, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx10, 35, 10, Globals.NoneColour)
+                    {
+                        MapTarget = p.Location,
+                        Blend = true,
+                    };
+
+                    DXSoundManager.Play(SoundIndex.SummonDeadEnd);
+                    break;
+                case Effect.BurningFireExplode:
+                    new MirEffect(1100, 10, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx6, 30, 60, Globals.FireColour)
+                    {
+                        MapTarget = p.Location,
+                        Blend = true
+                    };
+
+                    DXSoundManager.Play(SoundIndex.FireStormEnd);
+                    break;
                 default:
                     throw new ArgumentOutOfRangeException();
             }
@@ -1548,6 +1623,10 @@ namespace Client.Envir
                 if (ob.ObjectID != p.ObjectID) continue;
 
                 ob.VisibleBuffs.Add(p.Type);
+
+                if (p.Type == BuffType.SuperiorMagicShield)
+                    ob.EndMagicEffect(MagicEffect.MagicShield);
+
                 return;
             }
         }
@@ -1657,7 +1736,7 @@ namespace Client.Envir
                     GameScene.Game.User.CanHalfMoon = p.CanUse;
                     break;
                 case MagicType.DestructiveSurge:
-                    GameScene.Game.User.CanDestructiveBlow = p.CanUse;
+                    GameScene.Game.User.CanDestructiveSurge = p.CanUse;
                     break;
                 case MagicType.FlamingSword:
                     GameScene.Game.User.CanFlamingSword = p.CanUse;
@@ -1677,6 +1756,11 @@ namespace Client.Envir
                 case MagicType.FlameSplash:
                     GameScene.Game.User.CanFlameSplash = p.CanUse;
                     break;
+                case MagicType.DefensiveBlow:
+                    GameScene.Game.User.CanDefensiveBlow = p.CanUse;
+                    if (p.CanUse)
+                        GameScene.Game.ReceiveChat(CEnvir.Language.WeaponEnergyDefensiveBlow, MessageType.Hint);
+                    break;
                 case MagicType.FullBloom:
                 case MagicType.WhiteLotus:
                 case MagicType.RedLotus:
@@ -1684,6 +1768,15 @@ namespace Client.Envir
                 case MagicType.Karma:
                     if (GameScene.Game.User.AttackMagic == p.Magic)
                         GameScene.Game.User.AttackMagic = MagicType.None;
+                    break;
+                case MagicType.DragonBlood:
+                    GameScene.Game.User.CanPoisonAttack = p.CanUse;
+                    break;
+                case MagicType.CalamityOfFullMoon:
+                    GameScene.Game.User.CanFullMoonAttack = p.CanUse;
+                    break;
+                case MagicType.WaningMoon:
+                    GameScene.Game.User.CanWaningMoonAttack = p.CanUse;
                     break;
             }
         }
@@ -1793,8 +1886,6 @@ namespace Client.Envir
 
         public void Process(S.ItemsGained p)
         {
-
-
             foreach (ClientUserItem item in p.Items)
             {
                 ItemInfo displayInfo = item.Info;
@@ -2092,6 +2183,8 @@ namespace Client.Envir
 
                 fromCell.RefreshItem();
             }
+
+            DXItemCell.SelectedCell = null;
         }
 
         public void Process(S.ItemStatsChanged p)
@@ -2232,8 +2325,6 @@ namespace Client.Envir
         }
         public void Process(S.ItemSplit p)
         {
-
-
             DXItemCell fromCell;
 
             switch (p.Grid)
@@ -2299,9 +2390,8 @@ namespace Client.Envir
                 fromCell.Item.Count -= p.Count;
 
             fromCell.RefreshItem();
-
-
         }
+
         public void Process(S.ItemLock p)
         {
             DXItemCell cell;
@@ -2341,6 +2431,78 @@ namespace Client.Envir
 
             cell.RefreshItem();
         }
+        public void Process(S.ItemSort p)
+        {
+            DXItemCell[] grid;
+
+            switch (p.Grid)
+            {
+                case GridType.Inventory:
+                    grid = GameScene.Game.InventoryBox.Grid.Grid;
+                    break;
+                case GridType.Storage:
+                    grid = GameScene.Game.StorageBox.Grid.Grid;
+                    break;
+                case GridType.PartsStorage:
+                    grid = GameScene.Game.StorageBox.PartGrid.Grid;
+                    break;
+                default:
+                    return;
+            }
+
+            for (int i = 0; i < grid.Length; i++)
+            {
+                grid[i].Locked = false;
+                grid[i].Selected = false;
+                grid[i].Item = null;
+            }
+
+            foreach (var item in p.Items)
+            {
+                grid[item.Slot].Item = item;
+            }
+        }
+
+        public void Process(S.ItemDelete p)
+        {
+            DXItemCell cell;
+
+            switch (p.Grid)
+            {
+                case GridType.Inventory:
+                    cell = GameScene.Game.InventoryBox.Grid.Grid[p.Slot];
+                    break;
+                default:
+                    return;
+            }
+
+            cell.Locked = false;
+            cell.Selected = false;
+            DXItemCell.SelectedCell = null;
+
+            if (!p.Success) return;
+
+            if (!cell.Item.Info.ShouldLinkInfo)
+            {
+                for (int i = 0; i < GameScene.Game.BeltBox.Links.Length; i++)
+                {
+                    ClientBeltLink link = GameScene.Game.BeltBox.Links[i];
+                    if (link.LinkItemIndex != cell.Item.Index) continue;
+
+                    link.LinkItemIndex = -1;
+
+                    if (i < GameScene.Game.BeltBox.Grid.Grid.Length)
+                        GameScene.Game.BeltBox.Grid.Grid[i].QuickItem = null; //set belt to null
+
+                    if (!GameScene.Game.Observer)
+                        CEnvir.Enqueue(new C.BeltLinkChanged { Slot = link.Slot, LinkIndex = link.LinkInfoIndex, LinkItemIndex = link.LinkItemIndex }); //Update server
+                }
+            }
+
+            cell.Item = null;
+            cell.RefreshItem();
+        }
+
         public void Process(S.ItemExperience p)
         {
             DXItemCell cell;
@@ -2377,8 +2539,6 @@ namespace Client.Envir
             cell.RefreshItem();
         }
 
-
-
         public void Process(S.Chat p)
         {
             if (GameScene.Game == null) return;
@@ -2386,8 +2546,6 @@ namespace Client.Envir
             GameScene.Game.ReceiveChat(p.Text, p.Type, p.LinkedItems);
 
             if (p.Type != MessageType.Normal || p.ObjectID <= 0) return;
-
-            //TODO Items?
 
             foreach (MapObject ob in GameScene.Game.MapControl.Objects)
             {
@@ -3097,8 +3255,7 @@ namespace Client.Envir
 
         public void Process(S.BuffAdd p)
         {
-            MapObject.User.Buffs.Add(p.Buff);
-            MapObject.User.VisibleBuffs.Add(p.Buff.Type);
+            MapObject.User.AddBuff(p.Buff);
 
             GameScene.Game.BuffBox.BuffsChanged();
         }
@@ -3372,22 +3529,17 @@ namespace Client.Envir
             GameScene.Game.User.AttackMode = p.Mode;
 
             GameScene.Game.ReceiveChat(GameScene.Game.MainPanel.AttackModeLabel.Text, MessageType.System);
-
         }
+
         public void Process(S.ChangePetMode p)
         {
-
-
             GameScene.Game.User.PetMode = p.Mode;
 
             GameScene.Game.ReceiveChat(GameScene.Game.MainPanel.PetModeLabel.Text, MessageType.System);
-
         }
 
         public void Process(S.WeightUpdate p)
         {
-
-
             GameScene.Game.User.BagWeight = p.BagWeight;
             GameScene.Game.User.WearWeight = p.WearWeight;
             GameScene.Game.User.HandWeight = p.HandWeight;
@@ -3395,11 +3547,8 @@ namespace Client.Envir
             GameScene.Game.WeightChanged();
         }
 
-
         public void Process(S.TradeRequest p)
         {
-
-
             DXMessageBox messageBox = new DXMessageBox($"{p.Name} wishes to trade with you, Do you want to accept?", "Trade Request", DXMessageBoxButtons.YesNo);
 
             messageBox.YesButton.MouseClick += (o, e) => CEnvir.Enqueue(new C.TradeRequestResponse { Accept = true });
@@ -3408,23 +3557,17 @@ namespace Client.Envir
         }
         public void Process(S.TradeOpen p)
         {
-
-
             GameScene.Game.TradeBox.Visible = true;
             GameScene.Game.TradeBox.IsTrading = true;
             GameScene.Game.TradeBox.PlayerLabel.Text = p.Name;
         }
         public void Process(S.TradeClose p)
         {
-
-
             GameScene.Game.TradeBox.Visible = false;
             GameScene.Game.TradeBox.Clear();
         }
         public void Process(S.TradeAddItem p)
         {
-
-
             DXItemCell fromCell;
 
             switch (p.Cell.GridType)
@@ -3472,10 +3615,9 @@ namespace Client.Envir
             }
 
         }
+
         public void Process(S.TradeItemAdded p)
         {
-
-
             foreach (DXItemCell cell in GameScene.Game.TradeBox.PlayerGrid.Grid)
             {
                 if (cell.Item != null) continue;
@@ -3484,29 +3626,24 @@ namespace Client.Envir
                 return;
             }
         }
+
         public void Process(S.TradeAddGold p)
         {
-
-
             GameScene.Game.TradeBox.UserGoldLabel.Text = p.Gold.ToString("#,##0");
         }
+
         public void Process(S.TradeGoldAdded p)
         {
-
-
             GameScene.Game.TradeBox.PlayerGoldLabel.Text = p.Gold.ToString("#,##0");
         }
+
         public void Process(S.TradeUnlock p)
         {
-
-
             GameScene.Game.TradeBox.ConfirmButton.Enabled = true;
         }
 
         public void Process(S.GuildCreate p)
         {
-
-
             GameScene.Game.GuildBox.CreateAttempted = false;
         }
         public void Process(S.GuildInfo p)
@@ -3538,20 +3675,17 @@ namespace Client.Envir
                 GameScene.Game.MiniMapBox.Update(data);
             }
         }
+
         public void Process(S.GuildNoticeChanged p)
         {
-
-
             GameScene.Game.GuildBox.GuildInfo.Notice = p.Notice;
 
             if (!GameScene.Game.GuildBox.NoticeTextBox.Editable)
                 GameScene.Game.GuildBox.NoticeTextBox.TextBox.Text = p.Notice;
         }
+
         public void Process(S.GuildGetItem p)
         {
-
-
-
             DXItemCell[] grid;
 
             switch (p.Grid)
@@ -3586,12 +3720,12 @@ namespace Client.Envir
 
             fromCell.Item = p.Item;
         }
+
         public void Process(S.GuildNewItem p)
         {
-
-
             GameScene.Game.GuildBox.StorageGrid.Grid[p.Slot].Item = p.Item;
         }
+
         public void Process(S.GuildUpdate p)
         {
             GameScene.Game.GuildBox.GuildInfo.GuildFunds = p.GuildFunds;
@@ -3608,6 +3742,9 @@ namespace Client.Envir
 
             GameScene.Game.GuildBox.GuildInfo.DefaultPermission = p.DefaultPermission;
             GameScene.Game.GuildBox.GuildInfo.DefaultRank = p.DefaultRank;
+
+            GameScene.Game.GuildBox.GuildInfo.Colour = p.Colour;
+            GameScene.Game.GuildBox.GuildInfo.Flag = p.Flag;
 
             foreach (ClientGuildMemberInfo member in p.Members)
             {
@@ -3641,13 +3778,12 @@ namespace Client.Envir
                 GameScene.Game.MiniMapBox.Update(data);
             }
 
+
             if (GameScene.Game.GuildBox.Visible)
                 GameScene.Game.GuildBox.RefreshGuildDisplay();
         }
         public void Process(S.GuildKick p)
         {
-
-
             ClientGuildMemberInfo info = GameScene.Game.GuildBox.GuildInfo.Members.First(x => x.Index == p.Index);
 
             GameScene.Game.GuildBox.GuildInfo.Members.Remove(info);
@@ -3664,33 +3800,26 @@ namespace Client.Envir
         }
         public void Process(S.GuildIncreaseMember p)
         {
-
-
             GameScene.Game.GuildBox.IncreaseMemberButton.Enabled = true;
         }
+
         public void Process(S.GuildIncreaseStorage p)
         {
             GameScene.Game.GuildBox.IncreaseStorageButton.Enabled = true;
         }
+
         public void Process(S.GuildInviteMember p)
         {
-
-
-            GameScene.Game.GuildBox.AddMemberTextBox.Enabled = true;
             GameScene.Game.GuildBox.AddMemberButton.Enabled = true;
         }
+
         public void Process(S.GuildTax p)
         {
-
-
-            GameScene.Game.GuildBox.GuildTaxBox.Enabled = true;
             GameScene.Game.GuildBox.SetTaxButton.Enabled = true;
         }
 
         public void Process(S.GuildMemberOffline p)
         {
-
-
             ClientGuildMemberInfo info = GameScene.Game.GuildBox.GuildInfo.Members.First(x => x.Index == p.Index);
 
             info.LastOnline = CEnvir.Now;
@@ -3702,8 +3831,6 @@ namespace Client.Envir
         }
         public void Process(S.GuildInvite p)
         {
-
-
             DXMessageBox messageBox = new DXMessageBox($"{p.Name} has invited you to the guild {p.GuildName}\n" +
                                                        $"Do you want to join the guild?", "Guild Invitation", DXMessageBoxButtons.YesNo);
 
@@ -3716,8 +3843,6 @@ namespace Client.Envir
         }
         public void Process(S.GuildMemberOnline p)
         {
-
-
             ClientGuildMemberInfo info = GameScene.Game.GuildBox.GuildInfo.Members.First(x => x.Index == p.Index);
 
             info.LastOnline = DateTime.MaxValue;
@@ -3729,8 +3854,6 @@ namespace Client.Envir
         }
         public void Process(S.GuildMemberContribution p)
         {
-
-
             ClientGuildMemberInfo info = GameScene.Game.GuildBox.GuildInfo.Members.First(x => x.Index == p.Index);
 
             info.DailyContribution += p.Contribution;
@@ -3747,8 +3870,6 @@ namespace Client.Envir
         }
         public void Process(S.GuildDayReset p)
         {
-
-
             foreach (ClientGuildMemberInfo member in GameScene.Game.GuildBox.GuildInfo.Members)
                 member.DailyContribution = 0;
 
@@ -3758,16 +3879,16 @@ namespace Client.Envir
             if (GameScene.Game.GuildBox.Visible)
                 GameScene.Game.GuildBox.RefreshGuildDisplay();
         }
+
         public void Process(S.GuildFundsChanged p)
         {
-
-
             GameScene.Game.GuildBox.GuildInfo.GuildFunds += p.Change;
             GameScene.Game.GuildBox.GuildInfo.DailyGrowth += p.Change;
 
             if (GameScene.Game.GuildBox.Visible)
                 GameScene.Game.GuildBox.RefreshGuildDisplay();
         }
+
         public void Process(S.GuildChanged p)
         {
             foreach (MapObject ob in GameScene.Game.MapControl.Objects)
@@ -3779,13 +3900,12 @@ namespace Client.Envir
                 return;
             }
         }
+
         public void Process(S.GuildWar p)
         {
-            GameScene.Game.GuildBox.WarAttempted = false;
 
-            if (p.Success)
-                GameScene.Game.GuildBox.GuildWarTextBox.TextBox.Text = string.Empty;
         }
+
         public void Process(S.GuildWarStarted p)
         {
             GameScene.Game.GuildWars.Add(p.GuildName);
@@ -3795,6 +3915,7 @@ namespace Client.Envir
             foreach (MapObject ob in GameScene.Game.MapControl.Objects)
                 ob.NameChanged();
         }
+
         public void Process(S.GuildWarFinished p)
         {
             GameScene.Game.GuildWars.Remove(p.GuildName);
@@ -3804,6 +3925,7 @@ namespace Client.Envir
             foreach (MapObject ob in GameScene.Game.MapControl.Objects)
                 ob.NameChanged();
         }
+
         public void Process(S.GuildConquestStarted p)
         {
             GameScene.Game.ConquestWars.Add(CEnvir.CastleInfoList.Binding.First(x => x.Index == p.Index));
@@ -3835,11 +3957,8 @@ namespace Client.Envir
             castle.WarDate = p.WarDate;
         }
 
-
         public void Process(S.ReviveTimers p)
         {
-
-
             GameScene.Game.ItemReviveTime = CEnvir.Now + p.ItemReviveTime;
             GameScene.Game.ReincarnationPillTime = CEnvir.Now + p.ReincarnationPillTime;
         }

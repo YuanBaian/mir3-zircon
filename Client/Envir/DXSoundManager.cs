@@ -22,6 +22,8 @@ namespace Client.Envir
         {
             #region Music
             [SoundIndex.LoginScene] = new DXSound(SoundPath + @"Opening.wav", SoundType.Music) { Loop = true },
+            [SoundIndex.LoginScene2] = new DXSound(SoundPath + @"Main.wav", SoundType.Music) { Loop = true },
+            [SoundIndex.LoginScene3] = new DXSound(SoundPath + @"Ending.wav", SoundType.Music) { Loop = true },
             [SoundIndex.SelectScene] = new DXSound(SoundPath + @"SelChr.wav", SoundType.Music) { Loop = true },
             [SoundIndex.B000] = new DXSound(SoundPath + @"B000.wav", SoundType.Music) { Loop = true },
             [SoundIndex.B100] = new DXSound(SoundPath + @"B100.wav", SoundType.Music) { Loop = true },
@@ -121,14 +123,22 @@ namespace Client.Envir
             [SoundIndex.FlamingSword] = new DXSound(SoundPath + @"M26-3.wav", SoundType.Magic),
             [SoundIndex.DragonRise] = new DXSound(SoundPath + @"M26-1.wav", SoundType.Magic),
             [SoundIndex.BladeStorm] = new DXSound(SoundPath + @"M34-1.wav", SoundType.Magic),
+            [SoundIndex.DefensiveBlow] = new DXSound(SoundPath + @"M140-1.wav", SoundType.Magic),
 
-            [SoundIndex.DestructiveBlow] = new DXSound(SoundPath + @"M103-1.wav", SoundType.Magic),
+            [SoundIndex.DestructiveSurge] = new DXSound(SoundPath + @"M103-1.wav", SoundType.Magic),
 
             [SoundIndex.DefianceStart] = new DXSound(SoundPath + @"M106-3.wav", SoundType.Magic),
 
+            [SoundIndex.ReflectDamageStart] = new DXSound(SoundPath + @"M126-0.wav", SoundType.Magic),
+            
+            [SoundIndex.InvincibilityStart] = new DXSound(SoundPath + @"M137-2.wav", SoundType.Magic),
+            
             [SoundIndex.AssaultStart] = new DXSound(SoundPath + @"M109-1.wav", SoundType.Magic),
 
             [SoundIndex.SwiftBladeEnd] = new DXSound(SoundPath + @"M131-2.wav", SoundType.Magic),
+            
+            [SoundIndex.ElementalSwordStart] = new DXSound(SoundPath + @"cs252-1.wav", SoundType.Magic),
+            [SoundIndex.ElementalSwordEnd] = new DXSound(SoundPath + @"cs252-2.wav", SoundType.Magic),
 
             [SoundIndex.FireBallStart] = new DXSound(SoundPath + @"M1-1.wav", SoundType.Magic),
             [SoundIndex.FireBallTravel] = new DXSound(SoundPath + @"M1-2.wav", SoundType.Magic),
@@ -179,7 +189,7 @@ namespace Client.Envir
             [SoundIndex.FireStormEnd] = new DXSound(SoundPath + @"M23-3.wav", SoundType.Magic),
 
             [SoundIndex.LightningWaveStart] = new DXSound(SoundPath + @"M24-1.wav", SoundType.Magic),
-            [SoundIndex.LightningWaveEnd] = new DXSound(SoundPath + @"M24-3.wav", SoundType.Magic),
+            [SoundIndex.LightningWaveEnd] = new DXSound(SoundPath + @"M24-2.wav", SoundType.Magic),
 
             [SoundIndex.FrozenEarthStart] = new DXSound(SoundPath + @"M53-1.wav", SoundType.Magic),
             [SoundIndex.FrozenEarthEnd] = new DXSound(SoundPath + @"M53-3.wav", SoundType.Magic),
@@ -206,6 +216,13 @@ namespace Client.Envir
             [SoundIndex.ChainLightningEnd] = new DXSound(SoundPath + @"M111-3.wav", SoundType.Magic),
             
             [SoundIndex.FrostBiteStart] = new DXSound(SoundPath + @"m135-2.wav", SoundType.Magic),
+
+            [SoundIndex.ParasiteTravel] = new DXSound(SoundPath + @"m139-1.wav", SoundType.Magic),
+            [SoundIndex.ParasiteExplode] = new DXSound(SoundPath + @"m139-2.wav", SoundType.Magic),
+
+            [SoundIndex.ElementalHurricane] = new DXSound(SoundPath + @"m141-1.wav", SoundType.Magic),
+
+            [SoundIndex.TornadoStart] = new DXSound(SoundPath + @"cs255-1.wav", SoundType.Magic),
 
             [SoundIndex.HealStart] = new DXSound(SoundPath + @"M2-1.wav", SoundType.Magic),
             [SoundIndex.HealEnd] = new DXSound(SoundPath + @"M2-3.wav", SoundType.Magic),
@@ -237,6 +254,8 @@ namespace Client.Envir
             [SoundIndex.SummonSkeletonStart] = new DXSound(SoundPath + @"M17-1.wav", SoundType.Magic),
             [SoundIndex.SummonSkeletonEnd] = new DXSound(SoundPath + @"M17-3.wav", SoundType.Magic),
 
+            [SoundIndex.CursedDollEnd] = new DXSound(SoundPath + @"M137-2.wav", SoundType.Magic),
+
             [SoundIndex.InvisibilityEnd] = new DXSound(SoundPath + @"M18-1.wav", SoundType.Magic),
 
             [SoundIndex.MassInvisibilityTravel] = new DXSound(SoundPath + @"M19-2.wav", SoundType.Magic),
@@ -261,6 +280,13 @@ namespace Client.Envir
             [SoundIndex.StrengthOfFaithStart] = new DXSound(SoundPath + @"M123-1.wav", SoundType.Magic),
             [SoundIndex.StrengthOfFaithEnd] = new DXSound(SoundPath + @"M123-3.wav", SoundType.Magic),
 
+            [SoundIndex.NeutralizeTravel] = new DXSound(SoundPath + @"M19-2.wav", SoundType.Magic),
+            [SoundIndex.NeutralizeEnd] = new DXSound(SoundPath + @"m138-2.wav", SoundType.Magic),
+
+            [SoundIndex.DarkSoulPrison] = new DXSound(SoundPath + @"m136-2.wav", SoundType.Magic),
+
+            [SoundIndex.SummonDeadEnd] = new DXSound(SoundPath + @"cs258-1.wav", SoundType.Magic),
+
             [SoundIndex.PoisonousCloudStart] = new DXSound(SoundPath + @"as_157-1.wav", SoundType.Magic),
 
             [SoundIndex.CloakStart] = new DXSound(SoundPath + @"as_163.wav", SoundType.Magic),
@@ -272,10 +298,14 @@ namespace Client.Envir
             [SoundIndex.SweetBrier] = new DXSound(SoundPath + @"as_168.wav", SoundType.Magic),
             [SoundIndex.SweetBrierMale] = new DXSound(SoundPath + @"as_168-m.wav", SoundType.Magic),
             [SoundIndex.SweetBrierFemale] = new DXSound(SoundPath + @"as_168-f.wav", SoundType.Magic),
+            
+            [SoundIndex.CalamityOfFullMoon] = new DXSound(SoundPath + @"as_171.wav", SoundType.Magic),
+            [SoundIndex.WaningMoon] = new DXSound(SoundPath + @"as_176.wav", SoundType.Magic),
 
             [SoundIndex.Karma] = new DXSound(SoundPath + @"as_172.wav", SoundType.Magic),
             [SoundIndex.TheNewBeginning] = new DXSound(SoundPath + @"as_174.wav", SoundType.Magic),
-
+            [SoundIndex.Concentration] = new DXSound(SoundPath + @"M134-2.wav", SoundType.Magic),
+            
             [SoundIndex.SummonPuppet] = new DXSound(SoundPath + @"as_164-1.wav", SoundType.Magic),
 
             [SoundIndex.WraithGripStart] = new DXSound(SoundPath + @"as_159-1.wav", SoundType.Magic),
@@ -284,10 +314,12 @@ namespace Client.Envir
             [SoundIndex.AbyssStart] = new DXSound(SoundPath + @"M14-3.wav", SoundType.Magic),
             [SoundIndex.FlashOfLightEnd] = new DXSound(SoundPath + @"M123-3-1.wav", SoundType.Magic),
 
-            [SoundIndex.RagingWindStart] = new DXSound(SoundPath + @"M26-1.wav", SoundType.Magic),
-            [SoundIndex.EvasionStart] = new DXSound(SoundPath + @"243-5.wav", SoundType.Magic),
+            [SoundIndex.RagingWindStart] = new DXSound(SoundPath + @"243-5.wav", SoundType.Magic),
+            [SoundIndex.EvasionStart] = new DXSound(SoundPath + @"M26-1.wav", SoundType.Magic),
 
-            //[SoundIndex.LegBlowStart] = new DXSound(SoundPath + @"m136-2.wav", SoundType.Magic),
+            [SoundIndex.CorpseExploderEnd] = new DXSound(SoundPath + @"m125-2.wav", SoundType.Magic),
+
+            [SoundIndex.ChainofFireExplode] = new DXSound(SoundPath + @"cs261-1.wav", SoundType.Magic),
 
             #endregion
 

@@ -1,13 +1,14 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Linq;
-using Library;
+﻿using Library;
 using Library.Network;
 using Library.SystemModels;
 using Server.DBModels;
 using Server.Envir;
+using Server.Models.Magics;
 using Server.Models.Monsters;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
 using S = Library.Network.ServerPackets;
 
 namespace Server.Models
@@ -16,7 +17,6 @@ namespace Server.Models
     {
         public uint ObjectID { get; }
         public LinkedListNode<MapObject> Node;
-
 
         public DateTime SpawnTime { get; set; }
         public abstract ObjectType Race { get; }
@@ -81,9 +81,9 @@ namespace Server.Models
         public DateTime ActionTime, MoveTime, RegenTime, AttackTime, MagicTime, CellTime, StruckTime, BuffTime, ShockTime, DisplayHPMPTime, ItemReviveTime;
         public List<DelayedAction> ActionList;
 
-        public virtual bool CanMove => !Dead && SEnvir.Now >= ActionTime && SEnvir.Now >= MoveTime && SEnvir.Now > ShockTime && (Poison & PoisonType.Paralysis) != PoisonType.Paralysis && (Poison & PoisonType.WraithGrip) != PoisonType.WraithGrip && Buffs.All(x => x.Type != BuffType.DragonRepulse && x.Type != BuffType.FrostBite);
-        public virtual bool CanAttack => !Dead && SEnvir.Now >= ActionTime && SEnvir.Now >= AttackTime && (Poison & PoisonType.Paralysis) != PoisonType.Paralysis && Buffs.All(x => x.Type != BuffType.DragonRepulse && x.Type != BuffType.FrostBite);
-        public virtual bool CanCast => !Dead && SEnvir.Now >= ActionTime && SEnvir.Now >= MagicTime && (Poison & PoisonType.Paralysis) != PoisonType.Paralysis && (Poison & PoisonType.Silenced) != PoisonType.Silenced && Buffs.All(x => x.Type != BuffType.DragonRepulse && x.Type != BuffType.FrostBite);
+        public virtual bool CanMove => !Dead && SEnvir.Now >= ActionTime && SEnvir.Now >= MoveTime && SEnvir.Now > ShockTime && (Poison & PoisonType.Paralysis) != PoisonType.Paralysis && (Poison & PoisonType.WraithGrip) != PoisonType.WraithGrip && (Poison & PoisonType.Containment) != PoisonType.Containment && Buffs.All(x => x.Type != BuffType.DragonRepulse);
+        public virtual bool CanAttack => !Dead && SEnvir.Now >= ActionTime && SEnvir.Now >= AttackTime && (Poison & PoisonType.Paralysis) != PoisonType.Paralysis && (Poison & PoisonType.Fear) != PoisonType.Fear && Buffs.All(x => x.Type != BuffType.DragonRepulse);
+        public virtual bool CanCast => !Dead && SEnvir.Now >= ActionTime && SEnvir.Now >= MagicTime && (Poison & PoisonType.Paralysis) != PoisonType.Paralysis && (Poison & PoisonType.Fear) != PoisonType.Fear && (Poison & PoisonType.Silenced) != PoisonType.Silenced && Buffs.All(x => x.Type != BuffType.DragonRepulse);
 
         public List<SpellObject> SpellList = new List<SpellObject>();
 
@@ -207,7 +207,6 @@ namespace Server.Models
         {
             PoisonType current = PoisonType.None;
 
-
             for (int i = PoisonList.Count - 1; i >= 0; i--)
             {
                 Poison poison = PoisonList[i];
@@ -217,15 +216,17 @@ namespace Server.Models
                     continue;
                 }
 
-
                 current |= poison.Type;
 
                 if (SEnvir.Now < poison.TickTime) continue;
-                if (poison.TickCount-- <= 0) PoisonList.RemoveAt(i);
+
+                if (poison.TickCount-- <= 0) 
+                    PoisonList.RemoveAt(i);
+
                 poison.TickTime = SEnvir.Now + poison.TickFrequency;
 
-                bool infection = false;
                 int damage = 0;
+                bool explode = false;
                 MonsterObject mob;
                 switch (poison.Type)
                 {
@@ -241,58 +242,54 @@ namespace Server.Models
                     case PoisonType.HellFire:
                         damage += poison.Value;
                         break;
-                    case PoisonType.Infection:
-                        if (Race == ObjectType.Player)
-                            damage += 1 + Stats[Stat.Health] / 100;
-                        else
+                    case PoisonType.Parasite:
                         {
                             damage += poison.Value;
 
-                            for (int x = 0; x < poison.Owner.Stats[Stat.Rebirth]; x++)
-                                damage = (int)(damage * 1.5F);
-                        }
-
-                        infection = true;
-
-                        if (Race == ObjectType.Monster && poison.Owner.Race == ObjectType.Player)
-                        {
-                            mob = (MonsterObject)this;
-
-                            if (mob.EXPOwner == null)
-                                mob.EXPOwner = (PlayerObject)poison.Owner;
-                        }
-
-                        if (poison.TickCount <= 0) break;
-
-                        foreach (MapObject ob in poison.Owner.GetTargets(CurrentMap, CurrentLocation, 1))
-                        {
-                            //if (ob.Race != ObjectType.Monster) continue;
-
-
-                            if (ob.Race == ObjectType.Monster && ((MonsterObject)ob).MonsterInfo.IsBoss) continue;
-
-                            if (ob.PoisonList.Any(x => x.Type == PoisonType.Infection)) continue;
-
-                            ob.ApplyPoison(new Poison
+                            if (poison.TickCount < 0)
                             {
-                                Value = poison.Value,
-                                Owner = poison.Owner,
-                                TickCount = poison.TickCount,
-                                TickFrequency = poison.TickFrequency,
-                                Type = poison.Type,
-                                TickTime = poison.TickTime
-                            });
+                                explode = true;
+                            }
+                            else
+                            {
+                                if ((poison.Owner is PlayerObject owner) && owner.GetMagic(MagicType.Infection, out Infection infection))
+                                {
+                                    infection.MagicComplete(new object[]
+                                    {
+                                    MagicType.Infection,
+                                    this
+                                    });
+                                }
+                            }
                         }
                         break;
+                    case PoisonType.Burn:
+                        damage += poison.Value;
+                        break;
+                    case PoisonType.Containment:
+                        damage += poison.Value; 
+                        break;
+                    case PoisonType.Chain:
+                        damage += Chain.PoisonTick(this);
+                        break;
+                    case PoisonType.Hemorrhage:
+                        damage += poison.Value;
+                        break;
                 }
+
+                if (Stats[Stat.Invincibility] > 0)
+                    damage = 0;
 
                 if (damage > 0)
                 {
                     if (Race == ObjectType.Monster && ((MonsterObject)this).MonsterInfo.IsBoss)
                         damage = 0;
-                    else if (!infection)
-                        damage = Math.Min(CurrentHP - 1, damage);
-
+                    else
+                    {
+                        if (!poison.CanKill)
+                            damage = Math.Min(CurrentHP - 1, damage);
+                    }
+                        
                     if (damage > 0)
                     {
                         #region Conquest Stats
@@ -372,6 +369,25 @@ namespace Server.Models
                     RegenTime = SEnvir.Now + RegenDelay;
                     ShockTime = DateTime.MinValue;
                 }
+
+                if (explode)
+                {
+                    mob = (MonsterObject)this;
+
+                    mob.EXPOwner ??= (PlayerObject)poison.Owner;
+
+                    switch (poison.Type)
+                    {
+                        case PoisonType.Parasite:
+                            {
+                                if ((poison.Owner is PlayerObject owner) && owner.GetMagic(MagicType.Parasite, out Parasite parasite))
+                                {
+                                    parasite.Explode(this);
+                                }
+                            }
+                            break;
+                    }
+                }
             }
 
             if (current == Poison) return;
@@ -392,8 +408,6 @@ namespace Server.Models
             {
                 int amount;
                 PlayerObject player;
-
-                UserMagic magic;
 
                 if (buff.Pause) continue;
 
@@ -503,8 +517,10 @@ namespace Server.Models
 
                         player = (PlayerObject)this;
 
-                        if (!player.Magics.TryGetValue(MagicType.DarkConversion, out magic)) break;
-                        player.LevelMagic(magic);
+                        if (player.GetMagic(MagicType.DarkConversion, out DarkConversion darkConversion))
+                        {
+                            player.LevelMagic(darkConversion.Magic);
+                        }
                         break;
                     case BuffType.PKPoint:
                         buff.TickTime -= ticks;
@@ -541,9 +557,9 @@ namespace Server.Models
                         {
                             if (SEnvir.ConquestWars.Any(war => war.Map == CurrentMap))
                             {
-                                player.Character.Account.HuntGold2.Amount += 1;
+                                player.Character.Account.HuntGold.Amount += 1;
 
-                                player.CurrencyChanged(player.Character.Account.HuntGold2);
+                                player.CurrencyChanged(player.Character.Account.HuntGold);
 
                                 continue;
                             }
@@ -574,15 +590,14 @@ namespace Server.Models
 
                         List<Cell> cells = CurrentMap.GetCells(CurrentLocation, 0, 5);
 
-
-
                         switch (Race)
                         {
                             case ObjectType.Player:
                                 player = (PlayerObject)this;
 
-                                if (!player.Magics.TryGetValue(MagicType.DragonRepulse, out magic)) break;
-                                player.LevelMagic(magic);
+                                if (!player.GetMagic(MagicType.DragonRepulse, out DragonRepulse dragonRepulse)) break;
+
+                                player.LevelMagic(dragonRepulse.Magic);
 
                                 for (int c = cells.Count - 1; c >= 0; c--)
                                 {
@@ -597,11 +612,10 @@ namespace Server.Models
 
                                         if (!CanAttackTarget(ob)) continue;
 
-
                                         ActionList.Add(new DelayedAction(
                                             SEnvir.Now.AddMilliseconds(SEnvir.Random.Next(200) + Functions.Distance(CurrentLocation, ob.CurrentLocation) * 20),
                                             ActionType.DelayMagic,
-                                            new List<UserMagic> { magic },
+                                            MagicType.DragonRepulse,
                                             ob));
                                     }
                                 }
@@ -632,46 +646,106 @@ namespace Server.Models
                         }
                         break;
                     case BuffType.FrostBite:
-                        buff.RemainingTime -= ticks;
+                        {
+                            buff.RemainingTime -= ticks;
+                            if (buff.RemainingTime > TimeSpan.Zero) continue;
 
-                        if (buff.RemainingTime > TimeSpan.Zero) continue;
+                            Broadcast(new S.ObjectEffect { ObjectID = ObjectID, Effect = Effect.FrostBiteEnd });
 
-                        Broadcast(new S.ObjectEffect { ObjectID = ObjectID, Effect = Effect.FrostBiteEnd });
+                            if (this is PlayerObject ob && ob.GetMagic(MagicType.FrostBite, out FrostBite frostBite))
+                            {
+                                frostBite.FrostBiteEnd(buff);
+                            }
+
+                            FrostBiteImmunity = SEnvir.Now.AddSeconds(1);
+
+                            expiredBuffs.Add(buff);
+                        }
+                        break;
+                    case BuffType.ElementalHurricane:
+                        buff.TickTime -= ticks;
+
+                        if (buff.RemainingTime != TimeSpan.MaxValue)
+                        {
+                            buff.RemainingTime -= ticks;
+
+                            if (buff.RemainingTime <= TimeSpan.Zero)
+                                expiredBuffs.Add(buff);
+                        }
+
+                        if (buff.TickTime > TimeSpan.Zero) continue;
+
+                        buff.TickTime += buff.TickFrequency;
 
                         switch (Race)
                         {
                             case ObjectType.Player:
-                                player = (PlayerObject)this;
-
-                                if (!player.Magics.TryGetValue(MagicType.FrostBite, out magic)) break;
-                                player.LevelMagic(magic);
-
-                                foreach (MapObject ob in GetTargets(CurrentMap, CurrentLocation, 3))
                                 {
-                                    if (!CanAttackTarget(ob)) continue;
+                                    player = (PlayerObject)this;
 
-                                    if (ob.Race != ObjectType.Monster) continue;
+                                    if (!player.GetMagic(MagicType.ElementalHurricane, out ElementalHurricane elementalHurricane)) break;
 
-                                    MonsterObject mob = (MonsterObject)ob;
+                                    int cost = elementalHurricane.Magic.Cost;
 
-                                    if (mob.MonsterInfo.IsBoss) continue;
+                                    if (cost > CurrentMP)
+                                    {
+                                        expiredBuffs.Add(buff);
+                                    }
+                                    ChangeMP(-cost);
 
-                                    ActionList.Add(new DelayedAction(
-                                        SEnvir.Now.AddMilliseconds(SEnvir.Random.Next(500)),
-                                        ActionType.DelayedMagicDamage,
-                                        new List<UserMagic> { magic },
-                                        ob,
-                                        true,
-                                        buff.Stats,
-                                        0));
+                                    for (int i = 1; i <= 8; i++)
+                                    {
+                                        Point location = Functions.Move(CurrentLocation, Direction, i);
+                                        Cell cell = CurrentMap.GetCell(location);
+
+                                        ActionList.Add(new DelayedAction(
+                                            SEnvir.Now,
+                                            ActionType.DelayMagic,
+                                            MagicType.ElementalHurricane,
+                                            cell,
+                                            true));
+
+                                        switch (Direction)
+                                        {
+                                            case MirDirection.Up:
+                                            case MirDirection.Right:
+                                            case MirDirection.Down:
+                                            case MirDirection.Left:
+                                                ActionList.Add(new DelayedAction(
+                                                    SEnvir.Now,
+                                                    ActionType.DelayMagic,
+                                                    MagicType.ElementalHurricane,
+                                                    CurrentMap.GetCell(Functions.Move(location, Functions.ShiftDirection(Direction, -2))),
+                                                    false));
+                                                ActionList.Add(new DelayedAction(
+                                                    SEnvir.Now,
+                                                    ActionType.DelayMagic,
+                                                    MagicType.ElementalHurricane,
+                                                    CurrentMap.GetCell(Functions.Move(location, Functions.ShiftDirection(Direction, 2))),
+                                                    false));
+                                                break;
+                                            case MirDirection.UpRight:
+                                            case MirDirection.DownRight:
+                                            case MirDirection.DownLeft:
+                                            case MirDirection.UpLeft:
+                                                ActionList.Add(new DelayedAction(
+                                                    SEnvir.Now,
+                                                    ActionType.DelayMagic,
+                                                    MagicType.ElementalHurricane,
+                                                    CurrentMap.GetCell(Functions.Move(location, Functions.ShiftDirection(Direction, 1))),
+                                                    false));
+                                                ActionList.Add(new DelayedAction(
+                                                    SEnvir.Now,
+                                                    ActionType.DelayMagic,
+                                                    MagicType.ElementalHurricane,
+                                                    CurrentMap.GetCell(Functions.Move(location, Functions.ShiftDirection(Direction, -1))),
+                                                    false));
+                                                break;
+                                        }
+                                    }
+                                    break;
                                 }
-                                break;
-
                         }
-
-                        FrostBiteImmunity = SEnvir.Now.AddSeconds(1);
-
-                        expiredBuffs.Add(buff);
                         break;
                     default:
                         if (buff.RemainingTime == TimeSpan.MaxValue) continue;
@@ -1237,12 +1311,14 @@ namespace Server.Models
             CurrentHP = Stats[Stat.Health] * Stats[Stat.CelestialLight] / 100;
             BuffRemove(BuffType.CelestialLight);
         }
+
         public virtual void ItemRevive()
         {
             CurrentHP = Stats[Stat.Health];
             CurrentMP = Stats[Stat.Mana];
             ItemReviveTime = SEnvir.Now.AddSeconds(Stats[Stat.ItemReviveTime]);
         }
+
         public virtual int Purify(MapObject ob)
         {
             if (ob?.Node == null || ob.Dead) return 0;
@@ -1251,14 +1327,13 @@ namespace Server.Models
 
             List<BuffInfo> buffs = new List<BuffInfo>();
 
-
             if (CanHelpTarget(ob))
             {
                 result += ob.PoisonList.Count;
 
                 for (int i = ob.PoisonList.Count - 1; i >= 0; i--)
                 {
-                    if (ob.PoisonList[i].Type == PoisonType.Infection) continue;
+                    if (ob.PoisonList[i].Type == PoisonType.Parasite) continue;
 
                     ob.PoisonList.RemoveAt(i);
                 }
@@ -1268,13 +1343,13 @@ namespace Server.Models
                     switch (buff.Type)
                     {
                         case BuffType.MagicWeakness:
+                        case BuffType.DefensiveBlow:
                             buffs.Add(buff);
                             result++;
                             break;
                         default:
                             continue;
                     }
-
                 }
             }
 
@@ -1289,6 +1364,7 @@ namespace Server.Models
                         case BuffType.MagicResistance:
                         case BuffType.Resilience:
                         case BuffType.MagicShield:
+                        case BuffType.SuperiorMagicShield:
                         case BuffType.ElementalSuperiority:
                         case BuffType.BloodLust:
                         case BuffType.Defiance:
@@ -1305,6 +1381,7 @@ namespace Server.Models
                         case BuffType.DarkConversion:
                         case BuffType.Evasion:
                         case BuffType.RagingWind:
+                        case BuffType.Invincibility:
                             buffs.Add(buff);
                             result++;
                             break;
@@ -1350,6 +1427,7 @@ namespace Server.Models
                 case BuffType.Castle:
                 case BuffType.Guild:
                 case BuffType.Veteran:
+                case BuffType.Fame:
                     info.IsTemporary = true;
                     break;
                 case BuffType.RagingWind:
@@ -1477,7 +1555,7 @@ namespace Server.Models
             if (info != null)
                 BuffRemove(info);
         }
-        public virtual int Attacked(MapObject attacker, int power, Element elemnet, bool canReflect = true, bool ignoreShield = false, bool canCrit = true, bool canStruck = true) { return 0; }
+        public virtual int Attacked(MapObject attacker, int power, Element element, bool canReflect = true, bool ignoreShield = false, bool canCrit = true, bool canStruck = true) { return 0; }
 
         public List<MapObject> GetTargets(Map map, Point location, int radius)
         {
@@ -1583,6 +1661,15 @@ namespace Server.Models
 
             BuffRemove(BuffType.Heal);
             BuffRemove(BuffType.DragonRepulse);
+            BuffRemove(BuffType.ElementalHurricane);
+            BuffRemove(BuffType.DefensiveBlow);
+
+            var p = PoisonList.FirstOrDefault(x => x.Type == PoisonType.Chain);
+
+            if (p != null && p.Owner is PlayerObject owner && owner.GetMagic(MagicType.Chain, out Chain chain))
+            {
+                chain.Explode(this);
+            }
 
             PoisonList.Clear();
 
@@ -1601,7 +1688,7 @@ namespace Server.Models
         {
             int count = 0;
             if (Dead) return count;
-            if (Buffs.Any(x => x.Type == BuffType.Endurance || x.Type == BuffType.DragonRepulse)) return count;
+            if (Buffs.Any(x => x.Type == BuffType.Endurance || x.Type == BuffType.DragonRepulse || x.Type == BuffType.ElementalHurricane)) return count;
 
             PreventSpellCheck = true;
             for (int i = 0; i < distance; i++)
@@ -1615,8 +1702,6 @@ namespace Server.Models
 
                 ActionTime += Globals.TurnTime;
 
-
-
                 CurrentCell = cell.GetMovement(this); //Repel same direction across map ?
 
                 RemoveAllObjects();
@@ -1627,8 +1712,6 @@ namespace Server.Models
             }
             PreventSpellCheck = false;
 
-            /*    if (count > 0 && checkSpells)
-                    CheckSpellObjects();*/
             return count;
         }
 
@@ -1637,7 +1720,6 @@ namespace Server.Models
             //Ob can be Null
             return ob?.GroupMembers != null && ob.GroupMembers == GroupMembers;
         }
-
 
         public int GetDC()
         {
@@ -1731,9 +1813,17 @@ namespace Server.Models
         {
             int min = Stats[Stat.MinAC];
             int max = Stats[Stat.MaxAC];
+            int defensiveMastery = Stats[Stat.DefensiveMastery];
 
             if (min < 0) min = 0;
             if (min >= max) return max;
+
+            if (defensiveMastery > 0)
+            {
+                if (defensiveMastery >= 10) return max;
+
+                if (SEnvir.Random.Next(10) < defensiveMastery) return max;
+            }
 
             return SEnvir.Random.Next(min, max + 1);
         }
@@ -1757,7 +1847,7 @@ namespace Server.Models
         public TimeSpan TickFrequency;
         public int TickCount;
         public DateTime TickTime;
-        public object Extra;
+        public object Extra, Extra1;
+        public bool CanKill;
     }
-
 }

@@ -14,12 +14,12 @@ namespace Library
         public static Dictionary<MirAnimation, Frame> DefaultMonster;
 
 
-        public static Dictionary<MirAnimation, Frame> 
+        public static Dictionary<MirAnimation, Frame>
             ForestYeti, ChestnutTree, CarnivorousPlant,
-            DevouringGhost, 
-            Larva, 
+            DevouringGhost,
+            Larva,
             ZumaGuardian, ZumaKing,
-            Monkey, 
+            Monkey,
             NumaMage, CursedCactus, NetherWorldGate,
             WestDesertLizard,
             BanyaGuard, EmperorSaWoo,
@@ -36,11 +36,17 @@ namespace Library
             OrangeTiger, RedTiger, OrangeBossTiger, BigBossTiger,
 
             SDMob3, SDMob8, SDMob15, SDMob16, SDMob17, SDMob18, SDMob19, SDMob21, SDMob22, SDMob23, SDMob24, SDMob25, SDMob26,
-            
+
             LobsterLord, LobsterSpawn,
 
             DeadTree, BobbitWorm,
-            MonasteryMon1, MonasteryMon3;
+            MonasteryMon1, MonasteryMon3,
+
+            Tornado,
+
+            InfernalSoldier,
+
+            CastleFlag;
 
 
         static FrameSet()
@@ -85,7 +91,9 @@ namespace Library
                 [MirAnimation.HorseWalking] = new Frame(2320, 6, 10, TimeSpan.FromMilliseconds(100)),
                 [MirAnimation.HorseRunning] = new Frame(2400, 6, 10, TimeSpan.FromMilliseconds(100)),
                 [MirAnimation.HorseStruck] = new Frame(2480, 3, 10, TimeSpan.FromMilliseconds(100)),
-
+                [MirAnimation.ChannellingStart] = new Frame(560, 4, 10, TimeSpan.FromMilliseconds(100)), //Proj Spell (channelled)
+                [MirAnimation.ChannellingMiddle] = new Frame(563, 1, 10, TimeSpan.FromMilliseconds(1000)), //Proj Spell (channelled)
+                [MirAnimation.ChannellingEnd] = new Frame(0, 1, 10, TimeSpan.FromMilliseconds(60)), //Proj Spell (channelled)
                 //Repeated?
             };
 
@@ -716,6 +724,36 @@ namespace Library
             {
                 [MirAnimation.Show] = new Frame(400, 7, 10, TimeSpan.FromMilliseconds(100)) ,
                 [MirAnimation.Hide] = new Frame(400, 7, 10, TimeSpan.FromMilliseconds(100)) { Reversed = true, },
+            };
+
+            Tornado = new Dictionary<MirAnimation, Frame>
+            {
+                [MirAnimation.Show] = new Frame(0, 10, 0, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Standing] = new Frame(10, 9, 0, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Walking] = new Frame(10, 9, 0, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Combat1] = new Frame(10, 9, 0, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Hide] = new Frame(20, 7, 0, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Die] = new Frame(20, 7, 0, TimeSpan.FromMilliseconds(100)),
+            };
+
+            InfernalSoldier = new Dictionary<MirAnimation, Frame>
+            {
+                [MirAnimation.Standing] = new Frame(0, 4, 10, TimeSpan.FromMilliseconds(500)),
+                [MirAnimation.Walking] = new Frame(80, 6, 10, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Pushed] = new Frame(80, 6, 10, TimeSpan.FromMilliseconds(50)) { Reversed = true, StaticSpeed = true },
+                [MirAnimation.Combat1] = new Frame(160, 6, 10, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Combat2] = new Frame(240, 6, 10, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Struck] = new Frame(320, 3, 10, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Die] = new Frame(400, 9, 10, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Dead] = new Frame(409, 1, 10, TimeSpan.FromMilliseconds(1000)),
+                [MirAnimation.Show] = new Frame(480, 9, 10, TimeSpan.FromMilliseconds(100)),
+                [MirAnimation.Hide] = new Frame(480, 9, 10, TimeSpan.FromMilliseconds(100)) { Reversed = true }
+            };
+
+            CastleFlag = new Dictionary<MirAnimation, Frame>
+            {
+                [MirAnimation.Standing] = new Frame(0, 10, 0, TimeSpan.FromMilliseconds(500)),
+                [MirAnimation.Struck] = new Frame(0, 10, 0, TimeSpan.FromMilliseconds(100)),
             };
         }
     }

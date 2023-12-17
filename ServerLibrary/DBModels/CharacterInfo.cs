@@ -584,6 +584,21 @@ namespace Server.DBModels
         }
         private int _Rebirth;
 
+        public int Fame
+        {
+            get => _Fame;
+            set
+            {
+                if (_Fame == value) return;
+
+                int oldValue = _Fame;
+                _Fame = value;
+
+                OnChanged(oldValue, value, "Fame");
+            }
+        }
+        private int _Fame;
+
         public DateTime NextDeathDropChange
         {
             get { return _NextDeathDropChange; }
@@ -734,8 +749,8 @@ namespace Server.DBModels
         }
         private string _FiltersItemType;
 
-        public Dictionary<RequiredClass, int> LastRank = new Dictionary<RequiredClass, int>();
-        public Dictionary<RequiredClass, int> CurrentRank = new Dictionary<RequiredClass, int>();
+        public Dictionary<RequiredClass, int> CurrentRank = new ();
+        public Dictionary<RequiredClass, int> RankChange = new ();
 
         protected override void OnLoaded()
         {

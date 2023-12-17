@@ -1,8 +1,8 @@
-﻿using System;
+﻿using Library.SystemModels;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
-using Library.SystemModels;
 
 namespace Library.Network.ServerPackets
 {
@@ -190,6 +190,7 @@ namespace Library.Network.ServerPackets
         public List<uint> Targets { get; set; } = new List<uint>();
         public List<Point> Locations { get; set; } = new List<Point>();
         public bool Cast { get; set; }
+        public Element AttackElement { get; set; }
 
         public TimeSpan Slow { get; set; }
     }
@@ -204,6 +205,7 @@ namespace Library.Network.ServerPackets
         public List<uint> Targets { get; set; } = new List<uint>();
         public List<Point> Locations { get; set; } = new List<Point>();
     }
+
     public sealed class ObjectMining : Packet
     {
         public uint ObjectID { get; set; }
@@ -312,6 +314,7 @@ namespace Library.Network.ServerPackets
     {
         public uint ObjectID { get; set; }
         public int MonsterIndex { get; set; }
+        public string CustomName { get; set; }
         public Color NameColour { get; set; }
         public string PetOwner { get; set; }
 
@@ -330,12 +333,12 @@ namespace Library.Network.ServerPackets
         public List<BuffType> Buffs { get; set; }
         public bool Extra { get; set; }
 
+        public int Extra1 { get; set; }
+        public Color Colour { get; set; }
+
         public ClientCompanionObject CompanionObject { get; set; }
-
-        //public bool Extra { get; set; }
-        //public int ExtraInt { get; set; }
-
     }
+
     public sealed class ObjectNPC : Packet
     {
         public uint ObjectID { get; set; }
@@ -532,6 +535,13 @@ namespace Library.Network.ServerPackets
         public bool Success { get; set; }
     }
 
+    public sealed class ItemSort : Packet
+    {
+        public GridType Grid { get; set; }
+        public List<ClientUserItem> Items { get; set; }
+        public bool Success { get; set; }
+    }
+
     public sealed class ItemSplit : Packet
     {
         public GridType Grid { get; set; }
@@ -539,6 +549,13 @@ namespace Library.Network.ServerPackets
         public long Count { get; set; }
         public int NewSlot { get; set; }
 
+        public bool Success { get; set; }
+    }
+
+    public sealed class ItemDelete : Packet
+    {
+        public GridType Grid { get; set; }
+        public int Slot { get; set; }
         public bool Success { get; set; }
     }
 
@@ -738,6 +755,7 @@ namespace Library.Network.ServerPackets
         public List<ClientUserItem> Items { get; set; }
         public int Hair { get; set; }
         public Color HairColour { get; set; }
+        public int Fame { get; set; }
 
         //public int WearWeight { get; set; }
         //public int HandWeight { get; set; }
@@ -938,6 +956,9 @@ namespace Library.Network.ServerPackets
 
         public string DefaultRank { get; set; }
         public GuildPermission DefaultPermission { get; set; }
+
+        public Color Colour { get; set; }
+        public int Flag { get; set; }
 
         public List<ClientGuildMemberInfo> Members { get; set; }
     }

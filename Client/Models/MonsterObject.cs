@@ -1,16 +1,12 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Client.Controls;
-using Client.Envir;
+﻿using Client.Envir;
 using Client.Scenes;
 using Client.Scenes.Views;
 using Library;
 using Library.SystemModels;
-using SlimDX;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
 using S = Library.Network.ServerPackets;
 
 namespace Client.Models
@@ -35,6 +31,10 @@ namespace Client.Models
         public SoundIndex AttackSound, StruckSound, DieSound;
 
         public bool Extra, EasterEvent, ChristmasEvent, HalloweenEvent;
+
+        public int Extra1;
+
+        public Color Colour;
 
         public override int RenderY
         {
@@ -93,12 +93,15 @@ namespace Client.Models
 
             Light = Stats[Stat.Light];
 
-            Name = CompanionObject?.Name ?? MonsterInfo.MonsterName;
+            Name = string.IsNullOrEmpty(info.CustomName) ? (CompanionObject?.Name ?? MonsterInfo.MonsterName) : info.CustomName;
 
             PetOwner = info.PetOwner;
             NameColour = info.NameColour;
             Extra = info.Extra;
-            
+
+            Extra1 = info.Extra1;
+            Colour = info.Colour;
+
             CurrentLocation = info.Location;
             Direction = info.Direction;
             
@@ -1344,7 +1347,11 @@ namespace Client.Models
                     break;
                 case MonsterImage.InfernalSoldier:
                     CEnvir.LibraryList.TryGetValue(LibraryFile.Mon_26, out BodyLibrary);
-                    BodyShape = 2;
+
+                    foreach (KeyValuePair<MirAnimation, Frame> frame in FrameSet.InfernalSoldier)
+                        Frames[frame.Key] = frame.Value;
+
+                    BodyShape = 0;
                     break;
                 case MonsterImage.OmaWarlord:
                     CEnvir.LibraryList.TryGetValue(LibraryFile.Mon_3, out BodyLibrary);
@@ -2046,6 +2053,26 @@ namespace Client.Models
                     //Fuckjed up Mob
 
                     break;
+                case MonsterImage.CastleFlag:
+                    CEnvir.LibraryList.TryGetValue(LibraryFile.CastleFlag, out BodyLibrary);
+
+                    BodyOffSet = 100;
+
+                    foreach (KeyValuePair<MirAnimation, Frame> frame in FrameSet.CastleFlag)
+                        Frames[frame.Key] = frame.Value;
+
+                    BodyShape = Extra1;
+
+                    break;
+
+                case MonsterImage.Tornado:
+                    CEnvir.LibraryList.TryGetValue(LibraryFile.Mon_56, out BodyLibrary);
+                    BodyShape = 6;
+
+                    foreach (KeyValuePair<MirAnimation, Frame> frame in FrameSet.Tornado)
+                        Frames[frame.Key] = frame.Value;
+
+                    break;
                 default:
                     CEnvir.LibraryList.TryGetValue(LibraryFile.Mon_1, out BodyLibrary);
                     BodyShape = 0;
@@ -2157,9 +2184,9 @@ namespace Client.Models
                             break;
                     }
                     break;
-             //   case MirAction.Struck:
-             //       animation = MirAnimation.Struck;
-             //       break;
+                case MirAction.Struck:
+                    animation = MirAnimation.Struck;
+                    break;
                 case MirAction.Die:
                     animation = MirAnimation.Die;
                     break;
@@ -2199,7 +2226,6 @@ namespace Client.Models
 
             DrawShadow(DrawX, y);
 
-
             DrawBody(DrawX, y);
         }
 
@@ -2208,6 +2234,7 @@ namespace Client.Models
             switch (Image)
             {
                 case MonsterImage.DustDevil:
+                case MonsterImage.Tornado:
                     break;
                 case MonsterImage.LobsterLord:
                     BodyLibrary.Draw(BodyFrame, x, y, Color.White, true, 0.5f, ImageType.Shadow, Scale);
@@ -2218,13 +2245,14 @@ namespace Client.Models
                     BodyLibrary.Draw(BodyFrame, x, y, Color.White, true, 0.5f, ImageType.Shadow, Scale);
                     break;
             }
-
         }
+
         public void DrawBody(int x, int y)
         {
             switch (Image)
             {
                 case MonsterImage.DustDevil:
+                case MonsterImage.Tornado:
                     BodyLibrary.DrawBlend(BodyFrame, x, y, DrawColour, true, Opacity, ImageType.Image);
                     break;
                 case MonsterImage.LobsterLord:
@@ -2232,11 +2260,14 @@ namespace Client.Models
                     BodyLibrary.Draw(BodyFrame + 1000, x, y, DrawColour, true, Opacity, ImageType.Image, Scale);
                     BodyLibrary.Draw(BodyFrame + 2000, x, y, DrawColour, true, Opacity, ImageType.Image, Scale);
                     break;
+                case MonsterImage.CastleFlag:
+                    BodyLibrary.Draw(BodyFrame, x, y, DrawColour, true, Opacity, ImageType.Image, Scale);
+                    BodyLibrary.Draw(BodyFrame, DrawX, DrawY, Colour, true, 1F, ImageType.Overlay, Scale);
+                    break;
                 default:
                     BodyLibrary.Draw(BodyFrame, x, y, DrawColour, true, Opacity, ImageType.Image, Scale);
                     break;
             }
-
 
             MirLibrary library;
             switch (Image)
@@ -2255,6 +2286,7 @@ namespace Client.Models
                     if (CurrentAction == MirAction.Dead) break;
                     if (!CEnvir.LibraryList.TryGetValue(LibraryFile.MonMagicEx8, out library)) break;
                     library.DrawBlend(DrawFrame, x, y, Color.White, true, 1f, ImageType.Image);
+                    library.DrawBlend(DrawFrame + 1000, x, y, Color.White, true, 1f, ImageType.Image);
                     break;
                 case MonsterImage.JinamStoneGate:
                     if (CurrentAction == MirAction.Dead) break;
@@ -2323,10 +2355,10 @@ namespace Client.Models
                 case MonsterImage.ChestnutTree:
                     y -= MapControl.CellHeight;
                     break;
-                    case MonsterImage.JinamStoneGate:
+                case MonsterImage.JinamStoneGate:
                     return;
             }
-            DXManager.SetBlend(true, 0.60F, BlendMode.HIGHLIGHT);
+            DXManager.SetBlend(true, 0.20F, BlendMode.HIGHLIGHT);//0.60F
             DrawBody(DrawX, y);
             DXManager.SetBlend(false);
         }
@@ -3443,7 +3475,6 @@ namespace Client.Models
         public override void UpdateQuests()
         {
             if (GameScene.Game.HasQuest(MonsterInfo, GameScene.Game.MapControl.MapInfo)) //Todo Optimize by variable.
-
                 Title = "(Quest)";
             else
                 Title = string.Empty;

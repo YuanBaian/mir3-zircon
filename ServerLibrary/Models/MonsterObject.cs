@@ -1,16 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Linq;
-using System.Threading;
-using Library;
+﻿using Library;
 using Library.Network;
 using Library.SystemModels;
 using Server.DBModels;
 using Server.Envir;
+using Server.Models.Magics;
 using Server.Models.Monsters;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
 using S = Library.Network.ServerPackets;
-
 
 namespace Server.Models
 {
@@ -506,7 +505,7 @@ namespace Server.Models
                          }
                     };
                 case 103:
-                    return new GiantLizard { MonsterInfo = monsterInfo, AttackRange = 5 };
+                    return new InfernalSoldier { MonsterInfo = monsterInfo, AttackRange = 5 };
                 case 104:
                     return new FerociousIceTiger { MonsterInfo = monsterInfo };
                 case 105:
@@ -607,6 +606,15 @@ namespace Server.Models
                     };
                 case 127:
                     return new JinchonDevil { MonsterInfo = monsterInfo, CastDelay = TimeSpan.FromSeconds(8), DeathCloudDurationMin = 2000, DeathCloudDurationRandom = 5000 };
+                case 128:
+                    return new Doll { MonsterInfo = monsterInfo };
+                case 129:
+                    return new Monsters.Tornado { MonsterInfo = monsterInfo, Passive = true };
+                case 130:
+                    return new UndeadSoul() { MonsterInfo = monsterInfo };
+
+                case 1001:
+                    return new CastleFlag { MonsterInfo = monsterInfo };
                 default:
                     return new MonsterObject { MonsterInfo = monsterInfo };
             }
@@ -714,34 +722,39 @@ namespace Server.Models
 
             Stats[Stat.CriticalChance] = 1;
 
-            if (Buffs.Any(x => x.Type == BuffType.MagicWeakness))
-            {
-                Stats[Stat.MinMR] = 0;
-                Stats[Stat.MaxMR] = 0;
-            }
-
             foreach (BuffInfo buff in Buffs)
             {
                 if (buff.Stats == null) continue;
                 Stats.Add(buff.Stats);
             }
 
+            if (Buffs.Any(x => x.Type == BuffType.MagicWeakness))
+            {
+                Stats[Stat.MinMR] = 0;
+                Stats[Stat.MaxMR] = 0;
+            }
+
+            Stats[Stat.MinAC] += (Stats[Stat.MinAC] * Stats[Stat.PhysicalDefencePercent]) / 100;
+            Stats[Stat.MaxAC] += (Stats[Stat.MaxAC] * Stats[Stat.PhysicalDefencePercent]) / 100;
+
+            Stats[Stat.MinMR] += (Stats[Stat.MinMR] * Stats[Stat.MagicDefencePercent]) / 100;
+            Stats[Stat.MaxMR] += (Stats[Stat.MaxMR] * Stats[Stat.MagicDefencePercent]) / 100;
+
             if (PetOwner != null && PetOwner.Stats[Stat.PetDCPercent] > 0)
             {
                 Stats[Stat.MinDC] += Stats[Stat.MinDC] * PetOwner.Stats[Stat.PetDCPercent] / 100;
                 Stats[Stat.MaxDC] += Stats[Stat.MaxDC] * PetOwner.Stats[Stat.PetDCPercent] / 100;
-
-                foreach (UserMagic magic in Magics)
-                {
-                    switch (magic.Info.Magic)
-                    {
-                        case MagicType.DemonicRecovery:
-                            Stats[Stat.Health] += (magic.Level + 1) * 300;
-                            break;
-                    }
-                }
             }
 
+            foreach (UserMagic magic in Magics)
+            {
+                switch (magic.Info.Magic)
+                {
+                    case MagicType.DemonicRecovery:
+                        Stats[Stat.Health] += (magic.Level + 1) * 300;
+                        break;
+                }
+            }
 
             /*
             Stats[Stat.FireResistance] = Math.Min(5, Stats[Stat.FireResistance]);
@@ -805,6 +818,7 @@ namespace Server.Models
             if (CurrentHP > Stats[Stat.Health]) SetHP(Stats[Stat.Health]);
             if (CurrentMP > Stats[Stat.Mana]) SetMP(Stats[Stat.Mana]);
         }
+
         public virtual void ApplyBonusStats()
         {
 
@@ -1000,6 +1014,8 @@ namespace Server.Models
 
             if (CurrentHP >= Stats[Stat.Health]) return;
 
+            if ((Poison & PoisonType.Hemorrhage) == PoisonType.Hemorrhage) return;
+
             int regen = (int)Math.Max(1, Stats[Stat.Health] * 0.02F); //2% every 10 seconds aprox
 
             ChangeHP(regen);
@@ -1158,6 +1174,12 @@ namespace Server.Models
         public virtual void ProcessTarget()
         {
             if (Target == null) return;
+
+            if ((Poison & PoisonType.Fear) == PoisonType.Fear)
+            {
+                Walk(Functions.DirectionFromPoint(Target.CurrentLocation, CurrentLocation));
+                return;
+            }
 
             if (!InAttackRange())
             {
@@ -1408,7 +1430,6 @@ namespace Server.Models
                     return false;
             }
 
-
             if (ob.Buffs.Any(x => x.Type == BuffType.Invisibility) && !CoolEye) return false;
 
             if (ob.Buffs.Any(x => x.Type == BuffType.Cloak) && Stats[Stat.IgnoreStealth] == 0)
@@ -1418,7 +1439,7 @@ namespace Server.Models
                 if (ob.Level >= Level) return false;
             }
 
-            if (ob.Buffs.Any(x => x.Type == BuffType.Transparency) && ((Poison & PoisonType.Infection) != PoisonType.Infection || Level < 100)) return false;
+            if (ob.Buffs.Any(x => x.Type == BuffType.Transparency) && ((Poison & PoisonType.Parasite) != PoisonType.Parasite || Level < 100)) return false;
 
             switch (ob.Race)
             {
@@ -1561,7 +1582,6 @@ namespace Server.Models
                             break;
                     }
 
-
                     if (PetOwner.Pets.Any(x =>
                     {
                         if (x.Target == null) return false;
@@ -1618,7 +1638,7 @@ namespace Server.Models
 
             int damage;
 
-            if (PoisonList.Any(x => x.Type == PoisonType.Abyss) && SEnvir.Random.Next(2) > 0)
+            if ((Poison & PoisonType.Abyss) == PoisonType.Abyss && SEnvir.Random.Next(2) > 0)
             {
                 ob.Dodged();
                 return 0;
@@ -1654,7 +1674,6 @@ namespace Server.Models
                 return 0;
             }
 
-
             damage = ob.Attacked(this, damage, element, true, IgnoreShield);
 
             if (damage <= 0) return damage;
@@ -1681,7 +1700,6 @@ namespace Server.Models
                 TickFrequency = TimeSpan.FromSeconds(PoisonFrequency),
                 TickCount = PoisonTicks,
             });
-
 
             return damage;
         }
@@ -1756,12 +1774,11 @@ namespace Server.Models
 
             UpdateAttackTime();
 
-
             for (int d = min; d <= max; d++)
             {
                 MirDirection direction = Functions.ShiftDirection(Direction, d);
 
-                if (magic == MagicType.LightningBeam || magic == MagicType.BlowEarth)
+                if (magic == MagicType.LightningBeam || magic == MagicType.BlowEarth || magic == MagicType.ElementalHurricane)
                     locations.Add(Functions.Move(CurrentLocation, direction, distance));
 
                 for (int i = 1; i <= distance; i++)
@@ -1771,7 +1788,7 @@ namespace Server.Models
 
                     if (cell == null) continue;
 
-                    if (magic != MagicType.LightningBeam && magic != MagicType.BlowEarth)
+                    if (magic != MagicType.LightningBeam && magic != MagicType.BlowEarth && magic != MagicType.ElementalHurricane)
                         locations.Add(cell.Location);
 
                     if (cell.Objects != null)
@@ -1929,7 +1946,7 @@ namespace Server.Models
 
                     SpellObject spell = (SpellObject)cell.Objects[i];
 
-                    if (spell.Effect != SpellEffect.FireWall && spell.Effect != SpellEffect.MonsterFireWall && spell.Effect != SpellEffect.Tempest) continue;
+                    if (spell.Effect != SpellEffect.FireWall && spell.Effect != SpellEffect.Tempest) continue;
 
                     spell.Despawn();
                 }
@@ -1941,7 +1958,7 @@ namespace Server.Models
                 TickCount = 15,
                 TickFrequency = TimeSpan.FromSeconds(2),
                 Owner = this,
-                Effect = SpellEffect.MonsterFireWall
+                Effect = SpellEffect.FireWall
             };
 
             ob.Spawn(cell.Map, cell.Location);
@@ -2271,32 +2288,51 @@ namespace Server.Models
             ActionTime = SEnvir.Now.AddMilliseconds(Math.Min(MoveDelay, AttackDelay - 100));
 
             Poison poison = PoisonList.FirstOrDefault(x => x.Type == PoisonType.Slow);
+
             if (poison != null)
             {
                 AttackTime += TimeSpan.FromMilliseconds(poison.Value * 100);
                 ActionTime += TimeSpan.FromMilliseconds(poison.Value * 100);
             }
+
+            if ((Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
+            {
+                AttackTime += TimeSpan.FromMilliseconds(AttackDelay);
+                ActionTime += TimeSpan.FromMilliseconds(Math.Min(MoveDelay, AttackDelay - 100));
+            }
+
+            if ((Poison & PoisonType.Chain) == PoisonType.Chain)
+            {
+                AttackTime += TimeSpan.FromMilliseconds(100);
+                ActionTime += TimeSpan.FromMilliseconds(100);
+            }
         }
+
         public void UpdateMoveTime()
         {
             MoveTime = SEnvir.Now.AddMilliseconds(MoveDelay);
             ActionTime = SEnvir.Now.AddMilliseconds(Math.Min(MoveDelay - 100, AttackDelay));
 
             Poison poison = PoisonList.FirstOrDefault(x => x.Type == PoisonType.Slow);
+
             if (poison != null)
             {
                 AttackTime += TimeSpan.FromMilliseconds(poison.Value * 100);
                 ActionTime += TimeSpan.FromMilliseconds(poison.Value * 100);
             }
+
+            if ((Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
+            {
+                AttackTime += TimeSpan.FromMilliseconds(MoveDelay);
+                ActionTime += TimeSpan.FromMilliseconds(Math.Min(MoveDelay - 100, AttackDelay));
+            }
         }
 
         public override int Attacked(MapObject attacker, int power, Element element, bool canReflect = true, bool ignoreShield = false, bool canCrit = true, bool canStruck = true)
         {
-            if (attacker?.Node == null || power == 0 || Dead || attacker.CurrentMap != CurrentMap || !Functions.InRange(attacker.CurrentLocation, CurrentLocation, Config.MaxViewRange)) return 0;
+            if (attacker?.Node == null || power == 0 || Dead || attacker.CurrentMap != CurrentMap || !Functions.InRange(attacker.CurrentLocation, CurrentLocation, Config.MaxViewRange) || Stats[Stat.Invincibility] > 0) return 0;
 
             PlayerObject player;
-
-
 
             switch (attacker.Race)
             {
@@ -2347,12 +2383,26 @@ namespace Server.Models
                 Critical();
             }
 
+            buff = Buffs.FirstOrDefault(x => x.Type == BuffType.SuperiorMagicShield);
 
+            if (buff != null)
+            {
+                Stats[Stat.SuperiorMagicShield] -= power;
+                if (Stats[Stat.SuperiorMagicShield] <= 0)
+                    BuffRemove(buff);
+            }
+            else
+                ChangeHP(-power);
 
-            ChangeHP(-power);
+            var chainPoison = PoisonList.FirstOrDefault(x => x.Type == PoisonType.Chain);
 
-
-
+            if (chainPoison != null)
+            {
+                if ((chainPoison.Owner is PlayerObject owner) && owner.GetMagic(MagicType.Chain, out Chain chain))
+                {
+                    chain.SiphonDamage(this, power);
+                }
+            }
 
             if (Dead) return power;
 
@@ -2378,7 +2428,6 @@ namespace Server.Models
         public override void Die()
         {
             base.Die();
-
 
             YieldReward();
 
@@ -2432,7 +2481,7 @@ namespace Server.Models
                             SEnvir.Broadcast(new S.Chat { Text = action.StringParameter1, Type = MessageType.System });
                             break;
                         case EventActionType.MapMessage:
-                            map = SEnvir.GetMap(action.MapParameter1);
+                            map = SEnvir.GetMap(action.MapParameter1, CurrentMap.Instance, CurrentMap.InstanceSequence);
                             if (map == null) continue;
 
                             map.Broadcast(new S.Chat { Text = action.StringParameter1, Type = MessageType.System });
@@ -2689,7 +2738,7 @@ namespace Server.Models
                 if (SEnvir.ItemPartInfo != null)
                 {
                     if (drop.PartOnly ||
-                        ((SEnvir.Random.Next() > chance || (!SEnvir.IsCurrencyItem(drop.Item) && owner.Character.Account.ItemBot)) && ((long)userDrop.Progress <= userDrop.DropCount || SEnvir.IsCurrencyItem(drop.Item))))
+                        ((SEnvir.Random.Next() > chance || (!SEnvir.IsCurrencyItem(drop.Item) && owner.Character.Account.ItemBot)) && ((long)userDrop.Progress <= userDrop.DropCount)))
                     {
                         if (drop.Item.PartCount <= 1) continue;
 
@@ -2787,14 +2836,30 @@ namespace Server.Models
                         continue;
                     }
 
+                    if (SEnvir.IsUndroppableCurrencyItem(drop.Item))
+                    {
+                        //Only gold
+                        long taxableAmount = owner.Character.Account.GuildMember?.Guild?.CalculateGuildTax(item) ?? 0;
+
+                        if (taxableAmount > 0)
+                        {
+                            item.Count -= taxableAmount;
+
+                            owner.Character.Account.GuildMember.Contribute(taxableAmount);
+                        }
+
+                        owner.GainItem(item);
+                        continue;
+                    }
+
                     Cell cell = GetDropLocation(Config.DropDistance, owner) ?? CurrentCell;
+
                     ItemObject ob = new ItemObject
                     {
                         Item = item,
                         Account = owner.Character.Account,
                         MonsterDrop = true,
                     };
-
 
                     ob.Spawn(CurrentMap, cell.Location);
 
@@ -2810,7 +2875,6 @@ namespace Server.Models
                             ob.Item.ExpireTime);
 
                         if (owner.Companion.CanGainItems(true, check)) ob.PickUpItem(owner.Companion);
-
                     }
                 }
             }
@@ -2877,6 +2941,21 @@ namespace Server.Models
                                 continue;
                             }
 
+                            if (SEnvir.IsUndroppableCurrencyItem(task.ItemParameter))
+                            {
+                                //Only gold
+                                long taxableAmount = owner.Character.Account.GuildMember?.Guild?.CalculateGuildTax(item) ?? 0;
+
+                                if (taxableAmount > 0)
+                                {
+                                    item.Count -= taxableAmount;
+
+                                    owner.Character.Account.GuildMember.Contribute(taxableAmount);
+                                }
+
+                                owner.GainItem(item);
+                                continue;
+                            }
 
                             Cell cell = GetDropLocation(Config.DropDistance, owner) ?? CurrentCell;
                             ItemObject ob = new ItemObject
@@ -2885,8 +2964,6 @@ namespace Server.Models
                                 Account = owner.Character.Account,
                                 MonsterDrop = true,
                             };
-
-
 
                             ob.Spawn(CurrentMap, cell.Location);
 
@@ -2936,6 +3013,7 @@ namespace Server.Models
 
             Broadcast(new S.ObjectTurn { ObjectID = ObjectID, Direction = Direction, Location = CurrentLocation });
         }
+
         public virtual bool Walk(MirDirection direction)
         {
             if (!CanMove) return false;
@@ -2944,6 +3022,16 @@ namespace Server.Models
             if (cell == null) return false;
 
             if (cell.IsBlocking(this, false)) return false;
+
+            if ((Poison & PoisonType.Chain) == PoisonType.Chain)
+            {
+                var newCell = Chain.CheckWalk(this, cell, ref direction);
+                if (newCell == null) return false;
+
+                if (newCell.IsBlocking(this, false)) return false;
+
+                cell = newCell;
+            }
 
             if (AvoidFireWall && cell.Objects != null)
             {
@@ -2955,7 +3043,6 @@ namespace Server.Models
                     switch (spell.Effect)
                     {
                         case SpellEffect.FireWall:
-                        case SpellEffect.MonsterFireWall:
                         case SpellEffect.Tempest:
                             break;
                         default:
@@ -2975,8 +3062,6 @@ namespace Server.Models
 
             UpdateMoveTime();
 
-
-
             PreventSpellCheck = true;
             CurrentCell = cell; //.GetMovement(this);
             PreventSpellCheck = false;
@@ -2988,6 +3073,7 @@ namespace Server.Models
             CheckSpellObjects();
             return true;
         }
+
         protected virtual void MoveTo(Point target)
         {
             if (CurrentLocation == target) return;

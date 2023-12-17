@@ -189,6 +189,8 @@ namespace Client.Models
         #endregion
 
         public int BagWeight, WearWeight, HandWeight;
+        public float ShakeScreenCount;
+        public Point ShakeScreenOffset;
 
         public bool InSafeZone
         {
@@ -214,7 +216,7 @@ namespace Client.Models
         public MagicType AttackMagic;
 
         public ObjectAction MagicAction;
-        public bool CanPowerAttack;
+        public bool CanPowerAttack, CanPoisonAttack, CanFullMoonAttack, CanWaningMoonAttack;
 
         public ClientUserDiscipline Discipline;
 
@@ -245,20 +247,20 @@ namespace Client.Models
             }
         }
         private bool _CanHalfMoon;
-        public bool CanDestructiveBlow
+        public bool CanDestructiveSurge
         {
-            get { return _CanDestructiveBlow; }
+            get { return _CanDestructiveSurge; }
             set
             {
-                if (_CanDestructiveBlow == value) return;
-                _CanDestructiveBlow = value;
+                if (_CanDestructiveSurge == value) return;
+                _CanDestructiveSurge = value;
 
-                GameScene.Game.ReceiveChat(CanDestructiveBlow ? CEnvir.Language.UseDestructiveBlow : CEnvir.Language.DoNotUseDestructiveBlow, MessageType.Hint);
+                GameScene.Game.ReceiveChat(CanDestructiveSurge ? CEnvir.Language.UseDestructiveSurge : CEnvir.Language.DoNotUseDestructiveSurge, MessageType.Hint);
             }
         }
-        private bool _CanDestructiveBlow;
+        private bool _CanDestructiveSurge;
 
-        public bool CanFlamingSword, CanDragonRise, CanBladeStorm;
+        public bool CanFlamingSword, CanDragonRise, CanBladeStorm, CanDefensiveBlow;
 
         public bool CanFlameSplash
         {
@@ -333,16 +335,15 @@ namespace Client.Models
             GameScene.Game.DayTime = info.DayTime;
             GameScene.Game.GroupBox.AllowGroup = info.AllowGroup;
 
+            GameScene.Game.StruckEnabled = info.StruckEnabled;
+
             HermitPoints = info.HermitPoints;
 
             foreach (ClientUserMagic magic in info.Magics)
                 Magics[magic.Info] = magic;
 
             foreach (ClientBuffInfo buff in info.Buffs)
-            {
-                Buffs.Add(buff);
-                VisibleBuffs.Add(buff.Type);
-            }
+                AddBuff(buff);
 
             foreach (ClientUserCurrency currency in info.Currencies)
             {
@@ -438,7 +439,7 @@ namespace Client.Models
                     if (CEnvir.Now < MoveTime) return;
                     break;
                 case MirAction.Attack:
-                    action.Extra[2] = Functions.GetElement(Stats);
+                    action.Extra[2] = Functions.GetAttackElement(Stats);
                     
                     if (GameScene.Game.Equipment[(int)EquipmentSlot.Amulet]?.Info.ItemType == ItemType.DarkStone)
                     {
@@ -489,7 +490,6 @@ namespace Client.Models
                             else 
                                 if (pair.Value.Cost > CurrentMP) break;
 
-
                             attackMagic = AttackMagic;
                             break;
                         }
@@ -536,7 +536,7 @@ namespace Client.Models
                     }
 
 
-                    if (CanDestructiveBlow && (TargetObject != null || (GameScene.Game.MapControl.CanDestructiveBlow(action.Direction) &&
+                    if (CanDestructiveSurge && (TargetObject != null || (GameScene.Game.MapControl.CanDestructiveSurge(action.Direction) &&
                                                                         (GameScene.Game.MapControl.HasTarget(Functions.Move(CurrentLocation, action.Direction)) || attackMagic != MagicType.Thrusting))))
                     {
                         foreach (KeyValuePair<MagicInfo, ClientUserMagic> pair in Magics)
@@ -550,7 +550,20 @@ namespace Client.Models
                         }
                     }
 
-                    if (attackMagic == MagicType.None && CanFlameSplash && (TargetObject != null || GameScene.Game.MapControl.CanDestructiveBlow(action.Direction)))
+                    if (attackMagic == MagicType.None && CanPoisonAttack && TargetObject != null)
+                    {
+                        foreach (KeyValuePair<MagicInfo, ClientUserMagic> pair in Magics)
+                        {
+                            if (pair.Key.Magic != MagicType.DragonBlood) continue;
+
+                            if (pair.Value.Cost > CurrentMP) break;
+
+                            attackMagic = pair.Key.Magic;
+                            break;
+                        }
+                    }
+
+                    if (attackMagic == MagicType.None && CanFlameSplash && (TargetObject != null || GameScene.Game.MapControl.CanDestructiveSurge(action.Direction)))
                     {
                         foreach (KeyValuePair<MagicInfo, ClientUserMagic> pair in Magics)
                         {
@@ -563,7 +576,35 @@ namespace Client.Models
                         }
                     }
 
-                    if (CanBladeStorm)
+                    if (attackMagic == MagicType.None && CanWaningMoonAttack && TargetObject != null)
+                    {
+                        foreach (KeyValuePair<MagicInfo, ClientUserMagic> pair in Magics)
+                        {
+                            if (pair.Key.Magic != MagicType.WaningMoon) continue;
+
+                            if (pair.Value.Cost > CurrentMP) break;
+
+                            attackMagic = pair.Key.Magic;
+                            break;
+                        }
+                    }
+
+                    if (attackMagic == MagicType.None && CanFullMoonAttack && TargetObject != null)
+                    {
+                        foreach (KeyValuePair<MagicInfo, ClientUserMagic> pair in Magics)
+                        {
+                            if (pair.Key.Magic != MagicType.CalamityOfFullMoon) continue;
+
+                            if (pair.Value.Cost > CurrentMP) break;
+
+                            attackMagic = pair.Key.Magic;
+                            break;
+                        }
+                    }
+
+                    if (CanDefensiveBlow && GameScene.Game.MapControl.HasTarget(Functions.Move(CurrentLocation, action.Direction)))
+                        attackMagic = MagicType.DefensiveBlow;
+                    else if (CanBladeStorm)
                         attackMagic = MagicType.BladeStorm;
                     else if (CanDragonRise)
                         attackMagic = MagicType.DragonRise;
@@ -603,7 +644,7 @@ namespace Client.Models
                     attackDelay = Math.Max(800, attackDelay);
                     AttackTime = CEnvir.Now + TimeSpan.FromMilliseconds(attackDelay);
 
-                    if (BagWeight > Stats[Stat.BagWeight])
+                    if (BagWeight > Stats[Stat.BagWeight] || (Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
                         AttackTime += TimeSpan.FromMilliseconds(attackDelay);
 
                     CEnvir.Enqueue(new C.Attack { Direction = action.Direction, Action = action.Action, AttackMagic = MagicType });
@@ -611,7 +652,8 @@ namespace Client.Models
                     break;
                 case MirAction.Spell:
                     NextMagicTime = CEnvir.Now + Globals.MagicDelay;
-                    if (BagWeight > Stats[Stat.BagWeight])
+
+                    if (BagWeight > Stats[Stat.BagWeight] || (Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
                         NextMagicTime += Globals.MagicDelay;
 
                     CEnvir.Enqueue(new C.Magic { Direction = action.Direction, Action = action.Action, Type = MagicType, Target = AttackTargets?.Count > 0 ? AttackTargets[0].ObjectID : 0, Location = MagicLocations?.Count > 0 ? MagicLocations[0] : Point.Empty });
@@ -630,7 +672,9 @@ namespace Client.Models
                 case MirAction.Mining:
                     attackDelay = Globals.AttackDelay - Stats[Stat.AttackSpeed] * Globals.ASpeedRate;
                     attackDelay = Math.Max(800, attackDelay);
-                    AttackTime = CEnvir.Now + TimeSpan.FromMilliseconds(attackDelay);
+
+                    if (BagWeight > Stats[Stat.BagWeight] || (Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
+                        AttackTime += TimeSpan.FromMilliseconds(attackDelay);
 
                     if (BagWeight > Stats[Stat.BagWeight])
                         AttackTime += TimeSpan.FromMilliseconds(attackDelay);
@@ -655,7 +699,14 @@ namespace Client.Models
                 if (BagWeight > Stats[Stat.BagWeight] || WearWeight > Stats[Stat.WearWeight] || HandWeight > Stats[Stat.HandWeight])
                     DrawColour = Color.CornflowerBlue;
             }
-            
+
+            ShakeScreenOffset = new Point(0, (int)(Math.Sin(ShakeScreenCount) * 10));
+            if (ShakeScreenCount > 0)
+            {
+                ShakeScreenCount -= 1F;
+                GameScene.Game.MapControl.FLayer.TextureValid = false;
+            }
+
             TimeSpan ticks = CEnvir.Now - BuffTime;
             BuffTime = CEnvir.Now;
 
@@ -692,6 +743,17 @@ namespace Client.Models
                     }
 
                     break;
+                case MirAction.Spell:
+                    switch (MagicType)
+                    {
+                        case MagicType.SeismicSlam:
+                            if (FrameIndex == 4)
+                            {
+                                ShakeScreenCount = 20F;
+                            }
+                            break;
+                    }
+                    break;
             }
         }
         public override void MovingOffSetChanged()
@@ -713,6 +775,18 @@ namespace Client.Models
             GameScene.Game.TradeBox.UserLabel.Text = Name;
         }
 
+        public void AddBuff(ClientBuffInfo buff)
+        {
+            Buffs.Add(buff);
+            VisibleBuffs.Add(buff.Type);
+
+            if (buff.Type == BuffType.SuperiorMagicShield)
+            {
+                MaximumSuperiorMagicShield = buff.Stats[Stat.SuperiorMagicShield];
+                EndMagicEffect(MagicEffect.MagicShield);
+            }
+        }
+
         public ClientUserCurrency GetCurrency(ItemInfo item)
         {
             var info = Globals.CurrencyInfoList.Binding.FirstOrDefault(x => x.DropItem == item);
@@ -724,6 +798,7 @@ namespace Client.Models
 
             return Currencies.First(x => x.Info == info);
         }
+
         public ClientUserCurrency GetCurrency(CurrencyInfo info)
         {
             if (info == null)
@@ -732,6 +807,11 @@ namespace Client.Models
             }
 
             return Currencies.First(x => x.Info == info);
+        }
+
+        public ClientUserCurrency GetCurrency(CurrencyType type)
+        {
+            return Currencies.FirstOrDefault(x => x.Info.Type == type);
         }
     }
 }

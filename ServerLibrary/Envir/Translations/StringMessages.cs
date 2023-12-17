@@ -63,6 +63,9 @@ namespace Server.Envir
         public abstract string ConquestCapture { get; set; }
         public abstract string ConquestOwner { get; set; }
         public abstract string ConquestLost { get; set; }
+        public abstract string ConquestTakingFlag { get; set; }
+        public abstract string ConquestPreventingFlag { get; set; }
+        public abstract string ConquestNotTakingFlag { get; set; }
 
         [ConfigSection("Monster")]
         public abstract string BossSpawn { get; set; }
@@ -311,6 +314,7 @@ namespace Server.Envir
         public abstract string InstanceUserCooldown { get; set; }
         public abstract string InstanceGuildCooldown { get; set; }
         public abstract string InstanceNoSlots { get; set; }
+        public abstract string InstanceNoRejoin { get; set; }
         public abstract string InstanceMissingItem { get; set; }
         public abstract string InstanceNotGroupLeader { get; set; }
         public abstract string InstanceNoMap { get; set; }
@@ -320,5 +324,8 @@ namespace Server.Envir
         public abstract string DisciplineRequiredLevel { get; set; }
         public abstract string DisciplineRequiredGold { get; set; }
         public abstract string DisciplineRequiredExp { get; set; }
+
+        [ConfigSection("Fame")]
+        public abstract string FameNeedSpace { get; set; }
     }
 }

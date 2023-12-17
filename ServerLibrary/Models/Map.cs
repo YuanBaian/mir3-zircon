@@ -19,6 +19,8 @@ namespace Server.Models
         public MapInfo Info { get; }
         public InstanceInfo Instance { get; }
         public byte InstanceSequence { get; }
+        public int RespawnIndex { get; }
+
         public int Width { get; private set; }
         public int Height { get; private set; }
 
@@ -30,6 +32,7 @@ namespace Server.Models
         public List<MapObject> Objects { get; } = new List<MapObject>();
         public List<PlayerObject> Players { get; } = new List<PlayerObject>();
         public List<MonsterObject> Bosses { get; } = new List<MonsterObject>();
+        public List<MonsterObject> Flags { get; } = new List<MonsterObject>();
         public List<NPCObject> NPCs { get; } = new List<NPCObject>();
         public HashSet<MapObject>[] OrderedObjects;
 
@@ -37,9 +40,10 @@ namespace Server.Models
 
         public DateTime HalloweenEventTime, ChristmasEventTime;
 
-        public Map(MapInfo info, InstanceInfo instance = null, byte instanceSequence = 0)
+        public Map(MapInfo info, InstanceInfo instance = null, byte instanceSequence = 0, int respawnIndex = 0)
         {
             Info = info;
+            RespawnIndex = respawnIndex;
 
             if (instance != null)
             {
@@ -86,6 +90,7 @@ namespace Server.Models
         public void Setup()
         {
             CreateGuards();
+            CreateFlags();
 
             LastPlayer = DateTime.UtcNow;
         }
@@ -105,6 +110,35 @@ namespace Server.Models
             }
         }
 
+        private void CreateFlags()
+        {
+            foreach (var castle in Info.Castles)
+            {
+                foreach (var info in castle.Flags)
+                {
+                    MonsterObject mob = MonsterObject.GetMonster(info.Monster);
+
+                    if (!mob.Spawn(this, new Point(info.X, info.Y)))
+                    {
+                        SEnvir.Log($"Failed to spawn Flag Map:{Info.Description}, Location: {info.X}, {info.Y}");
+                        continue;
+                    }
+
+                    Flags.Add(mob);
+                }
+            }
+        }
+
+        public void RefreshFlags()
+        {
+            foreach (var ob in Flags)
+            {
+                if (ob is CastleFlag flag)
+                {
+                    flag.CurrentGuild = null;
+                }
+            }
+        }
 
         public void Process()
         {
@@ -171,7 +205,7 @@ namespace Server.Models
         {
             return GetCell(location.X, location.Y);
         }
-        public List<Cell> GetCells(Point location, int minRadius, int maxRadius)
+        public List<Cell> GetCells(Point location, int minRadius, int maxRadius, bool randomOrder = false)
         {
             List<Cell> cells = new List<Cell>();
 
@@ -194,6 +228,11 @@ namespace Server.Models
                         cells.Add(cell);
                     }
                 }
+            }
+
+            if (randomOrder)
+            {
+                return cells.OrderBy(item => SEnvir.Random.Next()).ToList();
             }
 
             return cells;
@@ -269,10 +308,7 @@ namespace Server.Models
 
         public void DoSpawn(bool eventSpawn)
         {
-            if (CurrentMap.Instance != null)
-            {
-
-            }
+            if (CurrentMap.RespawnIndex != Info.RespawnIndex) return;
 
             if (!eventSpawn)
             {
@@ -317,7 +353,6 @@ namespace Server.Models
                         CurrentMap.ChristmasEventTime = SEnvir.Now.AddMinutes(20);
                     }
                 }
-
 
                 mob.SpawnInfo = this;
 

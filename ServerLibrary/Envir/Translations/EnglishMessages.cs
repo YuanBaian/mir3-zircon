@@ -59,6 +59,9 @@ namespace Server.Envir.Translations
         public override string ConquestCapture { get; set; } = "{0} has Captured {1}.";
         public override string ConquestOwner { get; set; } = "{0} are the now the owners of {1}.";
         public override string ConquestLost { get; set; } = "{0} have lost {1}.";
+        public override string ConquestTakingFlag { get; set; } = "{0} is taking the flag for {1}. They must hold it for {2} seconds.";
+        public override string ConquestPreventingFlag { get; set; } = "{0} is preventing {1} from taking the flag for {2}.";
+        public override string ConquestNotTakingFlag { get; set; } = "{0} is no longer taking the flag for {1}.";
 
         public override string BossSpawn { get; set; } = "An evil lurks within {0}.";
         public override string HarvestRare { get; set; } = "Something valuable is hidden inside the {0}.";
@@ -269,7 +272,7 @@ namespace Server.Envir.Translations
         public override string AccessoryRefineFailed { get; set; } = "The refine failed and your {0}'s have been destroyed";
 
         public override string ChargeExpire { get; set; } = "The energy for {0} has left your weapon.";
-        public override string ChargeFail { get; set; } = "Failed to gether the energy to charge {0}.";
+        public override string ChargeFail { get; set; } = "Failed to gather the energy to charge {0}.";
         public override string CloakCombat { get; set; } = "You cannot cast Cloak during Combat";
         public override string DashFailed { get; set; } = "You were not strong enough to move what is infront of you.";
         public override string WraithLevel { get; set; } = "{0} is too high of a level to be effected by your wraith grip.";
@@ -293,6 +296,7 @@ namespace Server.Envir.Translations
         public override string InstanceUserCooldown { get; set; } = "Cannot re-enter instance until {0:ddd, dd MMM HH:mm} UTC.";
         public override string InstanceGuildCooldown { get; set; } = "Cannot re-enter instance until {0:ddd, dd MMM HH:mm} UTC.";
         public override string InstanceNoSlots { get; set; } = "No more free slots on instance.";
+        public override string InstanceNoRejoin { get; set; } = "Cannot rejoin instance.";
         public override string InstanceMissingItem { get; set; } = "You must be carrying a {0} to join instance.";
         public override string InstanceNotGroupLeader { get; set; } = "You must be the group leader to start instance.";
         public override string InstanceNoMap { get; set; } = "Failed to move to instance.";
@@ -301,5 +305,7 @@ namespace Server.Envir.Translations
         public override string DisciplineRequiredLevel { get; set; } = "Required level for next discipline is {0}.";
         public override string DisciplineRequiredGold { get; set; } = "Required gold for next discipline is {0:#,##0}.";
         public override string DisciplineRequiredExp { get; set; } = "Required experience for next discipline is {0}.";
+
+        public override string FameNeedSpace { get; set; } = "Unable to promote fame, Not enough space in your inventory.";
     }
 }

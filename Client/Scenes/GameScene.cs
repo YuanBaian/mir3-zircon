@@ -1,12 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Drawing;
-using System.Linq;
-using System.Reflection;
-using System.Text;
-using System.Windows.Forms;
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.Models;
 using Client.Scenes.Views;
@@ -14,8 +6,15 @@ using Client.UserModels;
 using Library;
 using Library.SystemModels;
 using MirDB;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Drawing;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using System.Windows.Forms;
 using C = Library.Network.ClientPackets;
-using UserObject = Client.Models.UserObject;
 
 //Cleaned
 namespace Client.Scenes
@@ -161,6 +160,7 @@ namespace Client.Scenes
         public NPCRefinementStoneDialog NPCRefinementStoneBox;
         public NPCRefineDialog NPCRefineBox;
         public NPCRefineRetrieveDialog NPCRefineRetrieveBox;
+        public NPCQuestListDialog NPCQuestListBox;
         public NPCQuestDialog NPCQuestBox;
         public NPCAdoptCompanionDialog NPCAdoptCompanionBox;
         public NPCCompanionStorageDialog NPCCompanionStorageBox;
@@ -276,16 +276,7 @@ namespace Client.Scenes
         private uint _NPCID;
         public void OnNPCIDChanged(uint oValue, uint nValue)
         {
-            if (MapControl?.Objects == null || NPCQuestBox == null) return;
 
-            foreach (MapObject ob in MapControl.Objects)
-            {
-                if (ob.Race != ObjectType.NPC || ob.ObjectID != NPCID) continue;
-
-                NPCQuestBox.NPCInfo = ((NPCObject) ob).NPCInfo;
-                return;
-            }
-            NPCQuestBox.NPCInfo = null;
         }
 
         #endregion
@@ -325,7 +316,9 @@ namespace Client.Scenes
 
         public uint InspectID;
         public DateTime PickUpTime, UseItemTime, NPCTime, ToggleTime, InspectTime, ItemTime = CEnvir.Now, ReincarnationPillTime, ItemReviveTime;
-        
+
+        public bool StruckEnabled;
+
         public float DayTime
         {
             get => _DayTime;
@@ -358,6 +351,7 @@ namespace Client.Scenes
             RankingBox?.LoadSettings();
             QuestBox?.LoadSettings();
             FishingBox?.LoadSettings();
+            GroupBox?.LoadSettings();
 
             LoadChatTabs();
         }
@@ -454,6 +448,11 @@ namespace Client.Scenes
             };
 
             NPCRepairBox = new NPCRepairDialog
+            {
+                Parent = this,
+                Visible = false,
+            };
+            NPCQuestListBox = new NPCQuestListDialog
             {
                 Parent = this,
                 Visible = false,
@@ -690,6 +689,7 @@ namespace Client.Scenes
             RankingBox.LoadSettings();
             QuestBox.LoadSettings();
             FishingBox.LoadSettings();
+            GroupBox.LoadSettings();
         }
 
         #region Methods
@@ -807,6 +807,11 @@ namespace Client.Scenes
                     pSetting.Name = tab.Panel.NameTextBox.TextBox.Text;
                     pSetting.Transparent = tab.Panel.TransparentCheckBox.Checked;
                     pSetting.Alert = tab.Panel.AlertCheckBox.Checked;
+                    pSetting.HideTab = tab.Panel.HideTabCheckBox.Checked;
+                    pSetting.ReverseList = tab.Panel.ReverseListCheckBox.Checked;
+                    pSetting.CleanUp = tab.Panel.CleanUpCheckBox.Checked;
+                    pSetting.FadeOut = tab.Panel.FadeOutCheckBox.Checked;
+
                     pSetting.LocalChat = tab.Panel.LocalCheckBox.Checked;
                     pSetting.WhisperChat = tab.Panel.WhisperCheckBox.Checked;
                     pSetting.GroupChat = tab.Panel.GroupCheckBox.Checked;
@@ -853,6 +858,11 @@ namespace Client.Scenes
 
                     tab.Panel.NameTextBox.TextBox.Text = tab.Settings.Name;
                     tab.Panel.AlertCheckBox.Checked = tab.Settings.Alert;
+                    tab.Panel.HideTabCheckBox.Checked = tab.Settings.HideTab;
+                    tab.Panel.ReverseListCheckBox.Checked = tab.Settings.ReverseList;
+                    tab.Panel.CleanUpCheckBox.Checked = tab.Settings.CleanUp;
+                    tab.Panel.FadeOutCheckBox.Checked = tab.Settings.FadeOut;
+
                     tab.Panel.LocalCheckBox.Checked = tab.Settings.LocalChat;
                     tab.Panel.WhisperCheckBox.Checked = tab.Settings.WhisperChat;
                     tab.Panel.GroupCheckBox.Checked = tab.Settings.GroupChat;
@@ -864,7 +874,6 @@ namespace Client.Scenes
                     tab.Panel.HintCheckBox.Checked = tab.Settings.HintChat;
                     tab.Panel.SystemCheckBox.Checked = tab.Settings.SystemChat;
                     tab.Panel.GainsCheckBox.Checked = tab.Settings.GainsChat;
-
                 }
 
                 foreach (ChatTab tab in ChatTab.Tabs)
@@ -955,8 +964,8 @@ namespace Client.Scenes
                 ob.Process();
 
             for (int i = MapControl.Effects.Count - 1; i >= 0; i--)
-                MapControl.Effects[i].Process();
-
+                    MapControl.Effects[i].Process();
+           
             for (int i = MapControl.ParticleEffects.Count - 1; i >= 0; i--)
                 MapControl.ParticleEffects[i].Process();
 
@@ -1167,7 +1176,7 @@ namespace Client.Scenes
                     case KeyBindAction.GroupAllowSwitch:
                         if (Observer) continue;
 
-                        GroupBox.AllowGroupButton.InvokeMouseClick();
+                        GroupBox.AllowGroupBox.InvokeMouseClick();
                         break;
                     case KeyBindAction.GroupTarget:
                         if (Observer) continue;
@@ -1583,9 +1592,25 @@ namespace Client.Scenes
                     ForeColour = Color.Yellow,
                     Location = new Point(ItemLabel.DisplayArea.Right, 4),
                     Parent = ItemLabel,
-                    Text = $"Amount: {MouseItem.Count}"
+                    Text = $"Amount: {MouseItem.Count:#,##0}"
                 };
                 ItemLabel.Size = new Size(label.DisplayArea.Right + 4, ItemLabel.Size.Height + 4);
+
+                if (!string.IsNullOrEmpty(displayInfo.Description))
+                {
+                    label = new DXLabel
+                    {
+                        ForeColour = Color.Wheat,
+                        Location = new Point(4, ItemLabel.DisplayArea.Bottom),
+                        Parent = ItemLabel,
+                        Text = displayInfo.Description,
+                    };
+
+                    ItemLabel.Size = new Size(label.DisplayArea.Right + 4 > ItemLabel.Size.Width ? label.DisplayArea.Right + 4 : ItemLabel.Size.Width,
+                        label.DisplayArea.Bottom > ItemLabel.Size.Height ? label.DisplayArea.Bottom : ItemLabel.Size.Height);
+                    ItemLabel.Size = new Size(ItemLabel.Size.Width, ItemLabel.Size.Height + 4);
+                }
+
                 return;
             }
 
@@ -2488,6 +2513,15 @@ namespace Client.Scenes
             };
             MagicLabel.Size = new Size(label.DisplayArea.Right + 4, label.DisplayArea.Bottom + 4);
 
+            label = new DXLabel
+            {
+                ForeColour = Color.Yellow,
+                Location = new Point(4, MagicLabel.DisplayArea.Bottom),
+                Parent = MagicLabel,
+                Text = $"<{MouseMagic.Property}>"
+            };
+            MagicLabel.Size = new Size(label.DisplayArea.Right + 4, label.DisplayArea.Bottom + 4);
+
             ClientUserMagic magic;
 
             int width;
@@ -2830,12 +2864,13 @@ namespace Client.Scenes
                 case MagicType.DestructiveSurge:
                     if (CEnvir.Now < ToggleTime) return;
                     ToggleTime = CEnvir.Now.AddSeconds(1);
-                    CEnvir.Enqueue(new C.MagicToggle { Magic = magic.Info.Magic, CanUse = !User.CanDestructiveBlow });
+                    CEnvir.Enqueue(new C.MagicToggle { Magic = magic.Info.Magic, CanUse = !User.CanDestructiveSurge });
                     return;
                 case MagicType.FlamingSword:
                 case MagicType.DragonRise:
                 case MagicType.BladeStorm:
                 case MagicType.DemonicRecovery:
+                case MagicType.DefensiveBlow:
                     if (CEnvir.Now < magic.NextCast || magic.Cost > User.CurrentMP) return;
                     magic.NextCast = CEnvir.Now.AddSeconds(0.5D); //Act as an anti spam
                     CEnvir.Enqueue(new C.MagicToggle { Magic = magic.Info.Magic });
@@ -2862,11 +2897,6 @@ namespace Client.Scenes
                         User.AttackMagic = magic.Info.Magic;
                     }
                     return;
-                case MagicType.Endurance:
-                    if (CEnvir.Now < magic.NextCast || magic.Cost > User.CurrentMP) return;
-                    magic.NextCast = CEnvir.Now.AddSeconds(0.5D); //Act as an anti spam
-                    CEnvir.Enqueue(new C.MagicToggle { Magic = magic.Info.Magic });
-                    return;
                 case MagicType.Karma:
                     if (CEnvir.Now < ToggleTime || CEnvir.Now < magic.NextCast || User.Buffs.All(x => x.Type != BuffType.Cloak)) return;
 
@@ -2878,11 +2908,11 @@ namespace Client.Scenes
                         User.AttackMagic = magic.Info.Magic;
                     }
                     return;
-
-                    //Endurance
             }
 
-            if (CEnvir.Now < User.NextMagicTime || User.Dead || User.Buffs.Any(x => x.Type == BuffType.DragonRepulse || x.Type ==  BuffType.FrostBite) ||     
+            if (CEnvir.Now < User.NextMagicTime || User.Dead || 
+                User.Buffs.Any(x => x.Type == BuffType.DragonRepulse) ||
+                (User.Buffs.Any(x => x.Type == BuffType.ElementalHurricane) && magic.Info.Magic != MagicType.ElementalHurricane) ||     
                 (User.Poison & PoisonType.Paralysis) == PoisonType.Paralysis || 
                 (User.Poison & PoisonType.Silenced) == PoisonType.Silenced) return;
 
@@ -2953,6 +2983,21 @@ namespace Client.Scenes
                         return;
                     }
                     break;
+                case MagicType.ElementalHurricane:
+                    int cost = magic.Cost;
+                    if (MapObject.User.VisibleBuffs.Contains(BuffType.ElementalHurricane))
+                        cost = 0;
+
+                    if (cost > User.CurrentMP)
+                    {
+                        if (CEnvir.Now >= OutputTime)
+                        {
+                            OutputTime = CEnvir.Now.AddSeconds(1);
+                            ReceiveChat($"Unable to cast {magic.Info.Name}, You do not have enough Mana.", MessageType.Hint);
+                        }
+                        return;
+                    }
+                    break;
                 default:
 
                     if (magic.Cost > User.CurrentMP)
@@ -2985,9 +3030,6 @@ namespace Client.Scenes
                     if (CanAttackTarget(MouseObject))
                         target = MouseObject;
 
-                    //    if (target == null) //TODO
-                    //        ;//target = GetCloseesTarget();
-
                     if (target == null) return;
 
                     if (!Functions.InRange(target.CurrentLocation, User.CurrentLocation, Globals.MagicRange))
@@ -3006,6 +3048,9 @@ namespace Client.Scenes
 
                     CEnvir.Enqueue(new C.Magic { Action = MirAction.Spell, Type = magic.Info.Magic, Target = target.ObjectID });
                     return;
+
+                case MagicType.ElementalSwords:
+
                 case MagicType.FireBall:
                 case MagicType.IceBolt:
                 case MagicType.LightningBall:
@@ -3018,17 +3063,19 @@ namespace Client.Scenes
                 case MagicType.IceBlades:
                 case MagicType.Cyclone:
                 case MagicType.ExpelUndead:
+                case MagicType.LightningStrike:
+                case MagicType.IceRain:
 
                 case MagicType.PoisonDust:
                 case MagicType.ExplosiveTalisman:
                 case MagicType.EvilSlayer:
                 case MagicType.GreaterEvilSlayer:
                 case MagicType.ImprovedExplosiveTalisman:
-                case MagicType.Infection:
-                    //Has Target
-                    if (CanAttackTarget(MagicObject))
-                        target = MagicObject;
+                case MagicType.Parasite:
+                case MagicType.Neutralize:
+                case MagicType.SearingLight:
 
+                case MagicType.Hemorrhage:
                     if (CanAttackTarget(MouseObject))
                     {
                         target = MouseObject;
@@ -3050,7 +3097,11 @@ namespace Client.Scenes
                     if (CanAttackTarget(MouseObject))
                         target = MouseObject;
                     break;
-                case MagicType.MassBeckon:
+
+                case MagicType.MagicCombustion:
+                    if (!CanAttackTarget(MouseObject) || MouseObject.Race != ObjectType.Player) return;
+
+                    target = MouseObject;
                     break;
 
                 case MagicType.Heal:
@@ -3066,18 +3117,51 @@ namespace Client.Scenes
 
                     target = MouseObject;
                     break;
+                case MagicType.SoulResonance:
+                    if (MouseObject == null || MouseObject.Dead || MouseObject.Race != ObjectType.Player || !IsAlly(MouseObject.ObjectID)) return;
+
+                    target = MouseObject;
+                    break;
+                case MagicType.CursedDoll:
+                    if (CanAttackTarget(MouseObject))
+                        target = MouseObject;
+                    break;
+                case MagicType.CorpseExploder:
+                case MagicType.SummonDead:
+                    if (MouseObject != null && MouseObject.Dead && (MouseObject.Race == ObjectType.Player || MouseObject.Race == ObjectType.Monster))
+                        target = MouseObject;
+                    break;
+
+                case MagicType.Spiritualism:
+                    if (Equipment[(int)EquipmentSlot.Amulet] == null || Equipment[(int)EquipmentSlot.Amulet].Info.Shape != 0 || Equipment[(int)EquipmentSlot.Amulet].Count < 1) return;
+
+                    direction = MirDirection.Down;
+                    break;
+
+                case MagicType.Rake:
+                    if (!User.VisibleBuffs.Contains(BuffType.Cloak)) return;
+                    break;
+
+                case MagicType.Chain:
+                    if (CanAttackTarget(MouseObject) && MouseObject.Race == ObjectType.Monster)
+                        target = MouseObject;
+                    break;
 
                 case MagicType.Defiance:
+                case MagicType.Invincibility:
                     direction = MirDirection.Down;
                     break;
                 case MagicType.Might:
+                    direction = MirDirection.Down;
+                    break;
+                case MagicType.MassBeckon:
                     direction = MirDirection.Down;
                     break;
                 case MagicType.ReflectDamage:
                     if (User.Buffs.Any(x => x.Type == BuffType.ReflectDamage)) return;
                     direction = MirDirection.Down;
                     break;
-                case MagicType.Fetter:
+                case MagicType.Endurance:
                     direction = MirDirection.Down;                    
                     break;
                 case MagicType.Renounce:
@@ -3085,16 +3169,18 @@ namespace Client.Scenes
                 case MagicType.StrengthOfFaith:
                     break;
                 case MagicType.MagicShield:
-                    if (User.Buffs.Any(x => x.Type == BuffType.MagicShield)) return;
+                    if (User.Buffs.Any(x => x.Type == BuffType.MagicShield || x.Type == BuffType.SuperiorMagicShield)) return;
+                    break;
+                case MagicType.SuperiorMagicShield:
+                    if (User.Buffs.Any(x => x.Type == BuffType.SuperiorMagicShield)) return;
                     break;
                 case MagicType.FrostBite:
                     if (User.Buffs.Any(x => x.Type == BuffType.FrostBite)) return;
                     break;
                 case MagicType.JudgementOfHeaven:
                     break;
-
-
                 case MagicType.SeismicSlam:
+                case MagicType.CrushingWave:
 
                 case MagicType.Repulsion:
                 case MagicType.ScortchedEarth:
@@ -3105,17 +3191,18 @@ namespace Client.Scenes
                 case MagicType.GreaterFrozenEarth:
                 case MagicType.ThunderStrike:
                 case MagicType.MirrorImage:
+                case MagicType.ElementalHurricane:
 
-                // case MagicType.SummonSkeleton:
                 case MagicType.Invisibility:
-                case MagicType.TaoistCombatKick:
+                case MagicType.CombatKick:
                 case MagicType.ThunderKick:
+                case MagicType.Fetter:
                 case MagicType.SummonSkeleton:
                 case MagicType.SummonShinsu:
                 case MagicType.SummonJinSkeleton:
                 case MagicType.SummonDemonicCreature:
                 case MagicType.DemonExplosion:
-                case MagicType.Scarecrow:
+                case MagicType.DarkSoulPrison:
 
                 case MagicType.PoisonousCloud:
                 case MagicType.Cloak:
@@ -3126,6 +3213,8 @@ namespace Client.Scenes
                 case MagicType.FlashOfLight:
                 case MagicType.Evasion:
                 case MagicType.RagingWind:
+                case MagicType.Concentration:
+                case MagicType.Containment:
                     break;
 
                 case MagicType.SwiftBlade:
@@ -3140,7 +3229,7 @@ namespace Client.Scenes
                 case MagicType.MeteorShower:
                 case MagicType.Tempest:
                 case MagicType.Asteroid:
-
+                case MagicType.Tornado:
 
                 case MagicType.MagicResistance:
                 case MagicType.Resilience:
@@ -3150,6 +3239,8 @@ namespace Client.Scenes
                 case MagicType.ElementalSuperiority:
                 case MagicType.BloodLust:
                 case MagicType.MassHeal:
+
+                case MagicType.BurningFire:
                     if (!Functions.InRange(MapControl.MapLocation, User.CurrentLocation, Globals.MagicRange))
                     {
                         if (CEnvir.Now < OutputTime) return;
@@ -3178,6 +3269,8 @@ namespace Client.Scenes
             uint targetID = target?.ObjectID ?? 0;
             Point targetLocation;
 
+            //Allows area casting instead of direct lock on (augmentations required)
+            //targetID and separate maplocation passed through - allowing for target lock and area lookup to work
             switch (magic.Info.Magic)
             {
                 case MagicType.Purification:
@@ -3186,21 +3279,20 @@ namespace Client.Scenes
                 case MagicType.ExplosiveTalisman:
                 case MagicType.ImprovedExplosiveTalisman:
                 case MagicType.PoisonDust:
+                case MagicType.Neutralize:
                     targetLocation = MapControl.MapLocation;
                     break;
                 default:
                     targetLocation = target?.CurrentLocation ?? MapControl.MapLocation;
                     break;
-
             }
-
 
             //switch spell type.
 
             if (MouseObject != null && MouseObject.Race == ObjectType.Monster)
                 FocusObject = (MonsterObject) MouseObject;
 
-            User.MagicAction = new ObjectAction(MirAction.Spell, direction, MapObject.User.CurrentLocation, magic.Info.Magic, new List<uint> { targetID }, new List<Point> { targetLocation }, false);
+            User.MagicAction = new ObjectAction(MirAction.Spell, direction, MapObject.User.CurrentLocation, magic.Info.Magic, new List<uint> { targetID }, new List<Point> { targetLocation }, false, Element.None);
         }
 
         private bool CanAttackTarget(MapObject ob)
@@ -3249,8 +3341,6 @@ namespace Client.Scenes
 
             if (image >= 0 && CEnvir.LibraryList.TryGetValue(LibraryFile.Inventory, out library))
             {
-
-
                 Size imageSize = library.GetSize(image);
                 Point p = new Point(CEnvir.MouseLocation.X - imageSize.Width/2, CEnvir.MouseLocation.Y - imageSize.Height/2);
 
@@ -3505,7 +3595,8 @@ namespace Client.Scenes
                 case ItemType.Book:
                     MagicInfo magic = Globals.MagicInfoList.Binding.FirstOrDefault(x => x.Index == item.Info.Shape);
                     if (magic == null) return false;
-                    if (User.Magics.ContainsKey(magic) && (User.Magics[magic].Level < 3 || (item.Flags & UserItemFlags.NonRefinable) == UserItemFlags.NonRefinable)) return false;
+                    if (magic.School == MagicSchool.None) return false;
+                    if (User.Magics.TryGetValue(magic, out ClientUserMagic value) && (value.Level < 3 || (item.Flags & UserItemFlags.NonRefinable) == UserItemFlags.NonRefinable)) return false;
                     break;
                 case ItemType.Consumable:
                     switch (item.Info.Shape)
@@ -3608,6 +3699,7 @@ namespace Client.Scenes
             NPCRefineBox.CloseButton.Enabled = !Observer;
             NPCRepairBox.CloseButton.Enabled = !Observer;
             NPCRefineRetrieveBox.CloseButton.Enabled = !Observer;
+            NPCQuestBox.CloseButton.Enabled = !Observer;
         }
         public void LevelChanged()
         {
@@ -3633,9 +3725,9 @@ namespace Client.Scenes
             foreach (NPCGoodsCell cell in NPCGoodsBox.Cells)
                 cell.UpdateColours();
 
-            MainPanel.MCLabel.Visible = User.Class != MirClass.Taoist;
-            MainPanel.SCLabel.Visible = User.Class == MirClass.Taoist;
-            
+            MainPanel.MCLabel.Visible = User.Class == MirClass.Wizard || User.Class == MirClass.Warrior;
+            MainPanel.SCLabel.Visible = User.Class == MirClass.Taoist || User.Class == MirClass.Assassin;
+
             MagicBox?.CreateTabs();
         }
         public void StatsChanged()
@@ -3643,16 +3735,13 @@ namespace Client.Scenes
             if (User.Stats == null) return;
 
             User.Light = Math.Max(3, User.Stats[Stat.Light]);
-            
+
             MainPanel.ACLabel.Text = User.Stats.GetFormat(Stat.MaxAC);
-            MainPanel.MRLabel.Text = User.Stats.GetFormat(Stat.MaxMR);
+            MainPanel.MACLabel.Text = User.Stats.GetFormat(Stat.MaxMR);
+
             MainPanel.DCLabel.Text = User.Stats.GetFormat(Stat.MaxDC);
-
-            MainPanel.MCLabel.Text = User.Stats.GetFormat(Stat.MaxMC);
             MainPanel.SCLabel.Text = User.Stats.GetFormat(Stat.MaxSC);
-
-            MainPanel.AccuracyLabel.Text = User.Stats[Stat.Accuracy].ToString();
-            MainPanel.AgilityLabel.Text = User.Stats[Stat.Agility].ToString();
+            MainPanel.MCLabel.Text = User.Stats.GetFormat(Stat.MaxMC);
 
             HealthChanged();
             ManaChanged();
@@ -3724,6 +3813,9 @@ namespace Client.Scenes
 
             InventoryBox.RefreshCurrency();
 
+            MainPanel.FPLabel.Text = User.GetCurrency(CurrencyType.FP)?.Amount.ToString() ?? "0";
+            MainPanel.CPLabel.Text = User.GetCurrency(CurrencyType.CP)?.Amount.ToString() ?? "0";
+
             MarketPlaceBox.GameGoldBox.Value = User.GameGold.Amount;
             MarketPlaceBox.HuntGoldBox.Value = User.HuntGold.Amount;
             NPCAdoptCompanionBox.RefreshUnlockButton();
@@ -3766,7 +3858,8 @@ namespace Client.Scenes
         public void MarriageChanged()
         {
             CharacterBox.MarriageIcon.Visible = !string.IsNullOrEmpty(Partner?.Name);
-            CharacterBox.MarriageIcon.Hint = Partner?.Name;
+            CharacterBox.MarriageLabel.Visible = !string.IsNullOrEmpty(Partner?.Name);
+            CharacterBox.MarriageLabel.Text = Partner?.Name;
         }
 
         public void ReceiveChat(string message, MessageType type, List<ClientUserItem> linkedItems = null)
@@ -3844,7 +3937,7 @@ namespace Client.Scenes
 
             QuestTrackerBox.PopulateQuests();
             
-            NPCQuestBox.UpdateQuestDisplay();
+            NPCQuestListBox.UpdateQuestDisplay();
 
             UpdateQuestIcons();
         }
@@ -4297,6 +4390,14 @@ namespace Client.Scenes
                         NPCRollBox.Dispose();
 
                     NPCRollBox = null;
+                }
+
+                if (NPCQuestListBox != null)
+                {
+                    if (!NPCQuestListBox.IsDisposed)
+                        NPCQuestListBox.Dispose();
+
+                    NPCQuestListBox = null;
                 }
 
                 if (NPCQuestBox != null)

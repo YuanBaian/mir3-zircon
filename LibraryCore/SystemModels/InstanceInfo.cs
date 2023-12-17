@@ -5,9 +5,6 @@ using System.Text.Json.Serialization;
 
 namespace Library.SystemModels
 {
-    //TODO - 
-    //Add conquest on instances
-
     public sealed class InstanceInfo : DBObject
     {
         [IsIdentity]
@@ -85,6 +82,36 @@ namespace Library.SystemModels
             }
         }
         private bool _SafeZoneOnly;
+
+        public bool AllowRejoin
+        {
+            get { return _AllowRejoin; }
+            set
+            {
+                if (_AllowRejoin == value) return;
+
+                var oldValue = _AllowRejoin;
+                _AllowRejoin = value;
+
+                OnChanged(oldValue, value, "AllowRejoin");
+            }
+        }
+        private bool _AllowRejoin;
+
+        public bool SavePlace
+        {
+            get { return _SavePlace; }
+            set
+            {
+                if (_SavePlace == value) return;
+
+                var oldValue = _SavePlace;
+                _SavePlace = value;
+
+                OnChanged(oldValue, value, "SavePlace");
+            }
+        }
+        private bool _SavePlace;
 
         public byte MinPlayerLevel
         {
@@ -310,6 +337,21 @@ namespace Library.SystemModels
             }
         }
         private MapInfo _Map;
+
+        public int RespawnIndex
+        {
+            get { return _RespawnIndex; }
+            set
+            {
+                if (_RespawnIndex == value) return;
+
+                var oldValue = _RespawnIndex;
+                _RespawnIndex = value;
+
+                OnChanged(oldValue, value, "RespawnIndex");
+            }
+        }
+        private int _RespawnIndex;
     }
 
     public sealed class InstanceInfoStat : DBObject

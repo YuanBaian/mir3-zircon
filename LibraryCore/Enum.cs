@@ -1,9 +1,5 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.ComponentModel;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Library
 {
@@ -206,12 +202,6 @@ namespace Library
         PartsStorage
     }
 
-    public enum GridSelect
-    {
-        Single,
-        Multi
-    }
-
     public enum InventoryMode
     {
         Normal,
@@ -247,16 +237,23 @@ namespace Library
 
         DeathDrops = 18,
 
+        Fame = 19,
+
         //War
         Defiance = 100,
         Might = 101,
         Endurance = 102,
         ReflectDamage = 103,
+        Invincibility = 104,
+        DefensiveBlow = 105,
 
         //Wiz
         Renounce = 200,
         MagicShield = 201,
         JudgementOfHeaven = 202,
+        ElementalHurricane = 203,
+        SuperiorMagicShield = 204,
+        FrostBite = 205,
 
         //Tao
         Heal = 300,
@@ -269,6 +266,8 @@ namespace Library
         CelestialLight = 307,
         Transparency = 308,
         LifeSteal = 309,
+        Spiritualism = 310,
+        SoulResonance = 311,
 
         //Ass
         PoisonousCloud = 400,
@@ -282,7 +281,8 @@ namespace Library
         DragonRepulse = 408,
         Evasion = 409,
         RagingWind = 410,
-        FrostBite = 411,
+        LastStand = 411,
+        Concentration = 412,
 
         MagicWeakness = 500,
     }
@@ -358,48 +358,50 @@ namespace Library
 
     public enum ItemType : byte
     {
-        Nothing,
-        Consumable,
-        Weapon,
-        Armour,
-        Torch,
-        Helmet,
-        Necklace,
-        Bracelet,
-        Ring,
-        Shoes,
-        Poison,
-        Amulet,
-        Meat,
-        Ore,
-        Book,
-        Scroll,
+        Nothing = 0,
+
+        Consumable = 1,
+        Weapon = 2,
+        Armour = 3,
+        Torch = 4,
+        Helmet = 5,
+        Necklace = 6,
+        Bracelet = 7,
+        Ring = 8,
+        Shoes = 9,
+        Poison = 10,
+        Amulet = 11,
+        Meat = 12,
+        Ore = 13,
+        Book = 14,
+        Scroll = 15,
         [Description("Dark Stone")]
-        DarkStone,
+        DarkStone = 16,
         [Description("Refine Special")]
-        RefineSpecial,
+        RefineSpecial = 17,
         [Description("Horse Armour")]
-        HorseArmour,
-        Flower,
+        HorseArmour = 18,
+        Flower = 19,
         [Description("Companion Food")]
-        CompanionFood,
+        CompanionFood = 20,
         [Description("Companion Bag")]
-        CompanionBag,
+        CompanionBag = 21,
         [Description("Companion Head")]
-        CompanionHead,
+        CompanionHead = 22,
         [Description("Companion Back")]
-        CompanionBack,
-        System,
+        CompanionBack = 23,
+        System = 24,
         [Description("Item Part")]
-        ItemPart,
-        Emblem,
-        Shield,
-        Costume,
-        Hook,
-        Float,
-        Bait,
-        Finder,
-        Reel
+        ItemPart = 25,
+        Emblem = 26,
+        Shield = 27,
+        Costume = 28,
+        Hook = 29,
+        Float = 30,
+        Bait = 31,
+        Finder = 32,
+        Reel = 33,
+        Currency = 34
     }
 
     public enum MirAction : byte
@@ -408,10 +410,10 @@ namespace Library
         Moving,
         Pushed,
         Attack,
-        RangeAttack, //?
+        RangeAttack,
         Spell,
         Harvest,
-      //  Struck,
+        Struck,
         Die,
         Dead,
         Show,
@@ -453,15 +455,21 @@ namespace Library
         Skeleton,
         Show,
         Hide,
+
         HorseStanding,
         HorseWalking,
         HorseRunning,
         HorseStruck,
 
         StoneStanding,
+
         DragonRepulseStart,
         DragonRepulseMiddle,
         DragonRepulseEnd,
+
+        ChannellingStart,
+        ChannellingMiddle,
+        ChannellingEnd,
 
         FishingCast,
         FishingWait,
@@ -520,8 +528,8 @@ namespace Library
         None,
 
         Passive = 1,
-        WeaponSkills,
-        Neutral,
+        Active,
+        Toggle,
         Fire,
         Ice,
         Lightning,
@@ -529,8 +537,11 @@ namespace Library
         Holy,
         Dark,
         Phantom,
-        Combat,
+        Physical,
+        Atrocity,
+        Kill,
         Assassination,
+
         Horse,
 
         Discipline = 20
@@ -571,12 +582,19 @@ namespace Library
         Endurance = 116,
         ReflectDamage = 117,
         Fetter = 118,
-        SwirlingBlade = 119,
-        ReigningStep = 120,
-        MaelstromBlade = 121,
+        AugmentDestructiveSurge = 119,
+        AugmentDefiance = 120,
+        AugmentReflectDamage = 121,
         AdvancedPotionMastery = 122,
         MassBeckon = 123,
         SeismicSlam = 124,
+        Invincibility = 125,
+        CrushingWave = 126,
+        DefensiveMastery = 127,
+        PhysicalImmunity = 128,
+        MagicImmunity = 129,
+        DefensiveBlow = 130,
+        ElementalSwords = 131,
 
         FireBall = 201,
         LightningBall = 202,
@@ -608,17 +626,18 @@ namespace Library
         Tempest = 228,
         JudgementOfHeaven = 229,
         ThunderStrike = 230,
-        RayOfLight = 231,
-        BurstOfEnergy = 232,
-        ShieldOfPreservation = 233,
-        RetrogressionOfEnergy = 234,
-        FuryBlast = 235,
-        TempestOfUnstableEnergy = 236,
-        MirrorImage = 237,
-        AdvancedRenounce = 238,
+        FireBounce = 231,
+        ElementalHurricane = 232,
+        SuperiorMagicShield = 233,
+        Burning = 234,
+        Shocked = 235,
+        LightningStrike = 236,
+        MirrorImage = 237,//NOT CODED
+        IceRain = 238,
         FrostBite = 239,
         Asteroid = 240,
-        FireBounce = 241,
+        Storm = 241,//NOT CODED
+        Tornado = 242,//NOT CODED
 
         Heal = 300,
         SpiritSword = 301,
@@ -631,7 +650,7 @@ namespace Library
         GreaterEvilSlayer = 308,
         Resilience = 309,
         TrapOctagon = 310,
-        TaoistCombatKick = 311,
+        CombatKick = 311,
         ElementalSuperiority = 312,
         MassHeal = 313,
         BloodLust = 314,
@@ -642,16 +661,16 @@ namespace Library
         EmpoweredHealing = 319,
         LifeSteal = 320,
         ImprovedExplosiveTalisman = 321,
-        GreaterPoisonDust = 322,
-        Scarecrow = 323,
+        AugmentPoisonDust = 322,
+        CursedDoll = 323,
         ThunderKick = 324,
-        DragonBreath = 325,
-        MassTransparency = 326,
-        GreaterHolyStrike = 327,
+        SoulResonance = 325,
+        Parasite = 326,
+        Spiritualism = 327,
         AugmentExplosiveTalisman = 328,
         AugmentEvilSlayer = 329,
         AugmentPurification = 330,
-        OathOfThePerished = 331,
+        AugmentResurrection = 331,
         SummonSkeleton = 332,
         SummonShinsu = 333,
         SummonJinSkeleton = 334,
@@ -660,6 +679,13 @@ namespace Library
         DemonExplosion = 337,
         Infection = 338,
         DemonicRecovery = 339,
+        Neutralize = 340,
+        AugmentNeutralize = 341,
+        DarkSoulPrison = 342,
+        SearingLight = 343,
+        AugmentCelestialLight = 344,
+        CorpseExploder = 345,
+        SummonDead = 346,
 
         WillowDance = 401,
         VineTreeDance = 402,
@@ -698,9 +724,22 @@ namespace Library
         Stealth = 435,
         Evasion = 436,
         RagingWind = 437,
-        AdvancedBloodyFlower = 438,
+        Unused = 438,//UNUSED
         Massacre = 439,
         ArtOfShadows = 440,
+        DragonBlood = 441,
+        FatalBlow = 442,
+        LastStand = 443,
+        MagicCombustion = 444,
+        Vitality = 445,
+        Chain = 446,
+        Concentration = 447,
+        DualWeaponSkills = 448,
+        Containment = 449,
+        DragonWave = 450,
+        Hemorrhage = 451,
+        BurningFire = 452,
+        ChainOfFire = 453,
 
         MonsterScortchedEarth = 501,
         MonsterIceStorm = 502,
@@ -730,6 +769,19 @@ namespace Library
 
         PinkFireBall = 530,
         GreenSludgeBall = 540,
+    }
+
+    public enum MagicProperty
+    {
+        None = 0,
+
+        Active = 1,
+
+        Passive = 2,
+        Augmentation = 3,
+
+        Toggle = 4,
+        Charge = 5
     }
 
     public enum MonsterImage
@@ -1016,6 +1068,10 @@ namespace Library
         MonasteryMon4,
         MonasteryMon5,
         MonasteryMon6,
+
+        CastleFlag,
+
+        Tornado
     }
 
     
@@ -1041,6 +1097,8 @@ namespace Library
         SweetBrier,
         Karma,
 
+        MirrorImage,
+
         Puppet,
         PuppetFire,
         PuppetIce,
@@ -1049,28 +1107,40 @@ namespace Library
 
         SummonSkeleton,
         SummonShinsu,
+        CursedDoll,
+        UndeadSoul,
 
         ThunderBolt,
+        FrostBiteEnd,
+
         DanceOfSwallow,
         FlashOfLight,
+        ChainOfFireExplode,
 
         DemonExplosion,
-        FrostBiteEnd
+        ParasiteExplode,
+        BurningFireExplode
     }
 
     [Flags]
     public enum PoisonType
     {
         None = 0,
-        Green = 1,
-        Red = 2,
-        Slow = 4,
-        Paralysis = 8,
-        WraithGrip = 16,
-        HellFire = 32,
-        Silenced = 64,
-        Abyss = 128,
-        Infection = 256,
+        Green = 1 << 0,         //Tick damage, displays green
+        Red = 1 << 1,           //Increases damage received by 20%, displays red
+        Slow = 1 << 2,          //Reduces attackTime, actionTime, 100ms per value, displays blue
+        Paralysis = 1 << 3,     //Stops movement, physical and magic attacks (all races), displays grey
+        WraithGrip = 1 << 4,    //Stops shoulderdash, movement, displays effect (needs code revisiting)
+        HellFire = 1 << 5,      //Tick damage, no colour
+        Silenced = 1 << 6,      //Stops movement (all races), physical and magic attacks (monster), displays effect
+        Abyss = 1 << 7,         //Reduces monster viewrange, displays blinding effect (player)
+        Parasite = 1 << 8,      //Tick damage, explosion, ignores transparency (monster), displays effect
+        Neutralize = 1 << 9,    //Stops attackTime, slows actionTime, displays effect (needs code revisiting)
+        Fear = 1 << 10,         //Stops attack (monster), forces runaway (monster), displays effect
+        Burn = 1 << 11,         //Tick damage, displays effect
+        Containment = 1 << 12,  //Tick damage, stops movement, displays effect
+        Chain = 1 << 13,        //Tick damage, limits movement, displays effect
+        Hemorrhage = 1 << 14,   //Tick damage, stops recovery, displays effect
     }
 
     public enum SpellEffect
@@ -1080,16 +1150,52 @@ namespace Library
         SafeZone,
 
         FireWall,
-        MonsterFireWall,
         Tempest,
 
         TrapOctagon,
+        DarkSoulPrison,
 
         PoisonousCloud,
+        BurningFire,
 
         Rubble,
 
         MonsterDeathCloud,
+    }
+
+
+    public enum MagicEffect
+    {
+        ReflectDamage,
+        Assault,
+        DefensiveBlow,
+
+        MagicShield,
+        MagicShieldStruck,
+        SuperiorMagicShield,
+        SuperiorMagicShieldStruck,
+        ElementalHurricane,
+        FrostBite,
+        Burn,
+
+        CelestialLight,
+        CelestialLightStruck,
+        Parasite,
+        Neutralize,
+
+        WraithGrip,
+        LifeSteal,
+        Silence,
+        Blind,
+        Fear,
+        Abyss,
+        DragonRepulse,
+        Containment,
+        Chain,
+        Hemorrhage,
+
+        Ranking,
+        Developer,
     }
 
     public enum MarketPlaceSort
@@ -1280,6 +1386,8 @@ namespace Library
         StatExtractor = 90,
         SpiritBlade = 91,
         RefineExtractor = 92,
+
+        DualWield = 100
     }
 
     public enum CurrencyType
@@ -1287,7 +1395,9 @@ namespace Library
         Gold = 0,
         GameGold = 1,
         HuntGold = 2,
-        Other = 3
+        Other = 3,
+        FP = 4,
+        CP = 5
     }
 
     [Flags]
@@ -1460,12 +1570,16 @@ namespace Library
         JinSkeleton = 2,
         Shinsu = 3,
         InfernalSoldier = 4,
-        Scarecrow = 5,
+        CursedDoll = 5,
 
         SummonPuppet = 6,
 
         MirrorImage = 7,
+        Tornado = 8,
 
+        UndeadSoul = 9,
+
+        CastleObjective = 10,
 
         Larva = 100,
 
@@ -1515,7 +1629,7 @@ namespace Library
         QuartzMiniTurtle = 204,
         QuartzTurtleSub = 205,
 
-        Sacrifice = 210,
+        Sacrifice = 210
     }
 
     public enum FishingState : byte
@@ -1662,6 +1776,7 @@ namespace Library
         TooManyInGroup,
         ConnectRegionNotSet,
         NoSlots,
+        NoRejoin,
         NotGroupLeader,
         UserCooldown,
         GuildCooldown,
@@ -1680,8 +1795,8 @@ namespace Library
         LoginScene,
         SelectScene,
 
-        // ProvinceMusic,
-        B000,
+        #region Province Music
+        B000 = 3,
         B2,
         B8,
         B009D,
@@ -1719,8 +1834,12 @@ namespace Library
         TS001,
         TS002,
         TS003,
+        #endregion
 
-        ButtonA,
+        LoginScene2,
+        LoginScene3,
+
+        ButtonA = 100,
         ButtonB,
         ButtonC,
 
@@ -1800,14 +1919,22 @@ namespace Library
 
         BladeStorm,
 
-        DestructiveBlow,
+        DefensiveBlow,
+
+        DestructiveSurge,
 
         DefianceStart,
+
+        ReflectDamageStart,
+
+        InvincibilityStart,
 
         AssaultStart,
 
         SwiftBladeEnd,
 
+        ElementalSwordStart,
+        ElementalSwordEnd,
 
         FireBallStart,
         FireBallTravel,
@@ -1847,10 +1974,8 @@ namespace Library
         TeleportationStart,
 
         LavaStrikeStart,
-        // LavaStrikeEnd,
 
         LightningBeamEnd,
-
 
         FrozenEarthStart,
         FrozenEarthEnd,
@@ -1885,8 +2010,14 @@ namespace Library
         ChainLightningStart,
         ChainLightningEnd,
 
+        ParasiteTravel,
+        ParasiteExplode,
+
         FrostBiteStart,
 
+        ElementalHurricane,
+
+        TornadoStart,
 
         HealStart,
         HealEnd,
@@ -1918,6 +2049,8 @@ namespace Library
         SummonSkeletonStart,
         SummonSkeletonEnd,
 
+        CursedDollEnd,
+
         InvisibilityEnd,
 
         MassInvisibilityTravel,
@@ -1942,6 +2075,14 @@ namespace Library
         StrengthOfFaithStart,
         StrengthOfFaithEnd,
 
+        NeutralizeTravel,
+        NeutralizeEnd,
+
+        DarkSoulPrison,
+
+        CorpseExploderEnd,
+
+        SummonDeadEnd,
 
         PoisonousCloudStart,
 
@@ -1959,9 +2100,16 @@ namespace Library
         SweetBrierMale,
         SweetBrierFemale,
 
+        WaningMoon,
+
+        CalamityOfFullMoon,
+
+        RakeStart,
+
         Karma,
 
         TheNewBeginning,
+        Concentration,
 
         SummonPuppet,
 
@@ -1972,6 +2120,7 @@ namespace Library
         EvasionStart,
         RagingWindStart,
 
+        ChainofFireExplode,
         #endregion
 
         #region Monsters
@@ -2089,7 +2238,6 @@ namespace Library
         AntNeedlerStruck,
         AntNeedlerDie,
 
-
         KeratoidAttack,
         KeratoidStruck,
         KeratoidDie,
@@ -2102,7 +2250,6 @@ namespace Library
         VisceralWormStruck,
         VisceralWormDie,
 
-
         MutantFleaAttack,
         MutantFleaStruck,
         MutantFleaDie,
@@ -2114,7 +2261,6 @@ namespace Library
         BlasterMutantFleaAttack,
         BlasterMutantFleaStruck,
         BlasterMutantFleaDie,
-
 
         WasHatchlingAttack,
         WasHatchlingStruck,
@@ -2317,7 +2463,6 @@ namespace Library
         DeathLordJichonAttack2,
         DeathLordJichonAttack3,
 
-
         MinotaurAttack,
         MinotaurStruck,
         MinotaurDie,
@@ -2333,8 +2478,6 @@ namespace Library
         EmperorSaWooAttack,
         EmperorSaWooStruck,
         EmperorSaWooDie,
-
-
 
         BoneArcherAttack,
         BoneArcherStruck,
@@ -2380,7 +2523,6 @@ namespace Library
         RazorTuskStruck,
         RazorTuskDie,
 
-
         PinkGoddessAttack,
         PinkGoddessStruck,
         PinkGoddessDie,
@@ -2414,7 +2556,6 @@ namespace Library
 
         ShinsuShow,
 
-
         CorpseStalkerAttack,
         CorpseStalkerStruck,
         CorpseStalkerDie,
@@ -2438,7 +2579,6 @@ namespace Library
         AquaLizardAttack,
         AquaLizardStruck,
         AquaLizardDie,
-
 
         CrimsonNecromancerAttack,
         CrimsonNecromancerStruck,
@@ -2472,8 +2612,6 @@ namespace Library
         NumaArmoredSoldierAttack,
         NumaArmoredSoldierStruck,
         NumaArmoredSoldierDie,
-
-
 
         IcyRangerAttack,
         IcyRangerStruck,
@@ -2541,8 +2679,6 @@ namespace Library
         QueenOfDawnStruck,
         QueenOfDawnDie,
 
-
-
         OYoungBeastAttack,
         OYoungBeastStruck,
         OYoungBeastDie,
@@ -2583,8 +2719,6 @@ namespace Library
         FerociousIceTigerStruck,
         FerociousIceTigerDie,
 
-
-
         SamaFireGuardianAttack,
         SamaFireGuardianStruck,
         SamaFireGuardianDie,
@@ -2600,7 +2734,6 @@ namespace Library
         SamaWindGuardianAttack,
         SamaWindGuardianStruck,
         SamaWindGuardianDie,
-
 
         PhoenixAttack,
         PhoenixStruck,
@@ -2618,16 +2751,9 @@ namespace Library
         WhiteTigerStruck,
         WhiteTigerDie,
 
-
-
-
         #endregion
-
-        ThunderKickEnd,
-
-        ThunderKickStart,
-        RakeStart,
-
     }
+
     #endregion
+
 }

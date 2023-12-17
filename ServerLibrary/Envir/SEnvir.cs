@@ -24,6 +24,7 @@ using System.Reflection;
 using System.Globalization;
 using Server.Envir.Commands.Handler;
 using Server.Envir.Commands;
+using Server.Models.Magics;
 using System.Numerics;
 
 namespace Server.Envir
@@ -267,6 +268,7 @@ namespace Server.Envir
         public static DBCollection<MonsterInfo> MonsterInfoList;
         public static DBCollection<FishingInfo> FishingInfoList;
         public static DBCollection<DisciplineInfo> DisciplineInfoList;
+        public static DBCollection<FameInfo> FameInfoList;
         public static DBCollection<SetInfo> SetInfoList;
         public static DBCollection<AuctionInfo> AuctionInfoList;
         public static DBCollection<MailInfo> MailInfoList;
@@ -308,6 +310,8 @@ namespace Server.Envir
         public static MapRegion MysteryShipMapRegion, LairMapRegion;
 
         public static List<MonsterInfo> BossList = new List<MonsterInfo>();
+
+        public static List<Type> MagicTypes = new List<Type>();
 
         #endregion
 
@@ -422,6 +426,7 @@ namespace Server.Envir
             RespawnInfoList = Session.GetCollection<RespawnInfo>();
             MagicInfoList = Session.GetCollection<MagicInfo>();
             CurrencyInfoList = Session.GetCollection<CurrencyInfo>();
+            FameInfoList = Session.GetCollection<FameInfo>();
 
             AccountInfoList = Session.GetCollection<AccountInfo>();
             CharacterInfoList = Session.GetCollection<CharacterInfo>();
@@ -495,8 +500,10 @@ namespace Server.Envir
             TopRankings = new HashSet<CharacterInfo>();
             foreach (CharacterInfo info in CharacterInfoList.Binding)
             {
+                if (info.Deleted) continue;
+
                 info.RankingNode = Rankings.AddLast(info);
-                RankingSort(info, false);
+                RankingSort(info, false, true);
             }
             UpdateLead();
             #endregion
@@ -516,19 +523,45 @@ namespace Server.Envir
 
                 BossList.Add(monster);
             }
+
+            CreateMagic();
         }
 
-
-        public static void RankingSort(CharacterInfo character, bool updateLead = true)
+        public static void RankingSort(CharacterInfo character, bool updateLead = true, bool initialSetup = false)
         {
             //Only works on Increasing EXP, still need to do Rebirth or loss of exp ranking update.
             bool changed = false;
 
             LinkedListNode<CharacterInfo> node;
+
             while ((node = character.RankingNode.Previous) != null)
             {
                 if (node.Value.Level > character.Level) break;
                 if (node.Value.Level == character.Level && node.Value.Experience >= character.Experience) break;
+
+                if (!initialSetup)
+                {
+                    SwapRankPosition(character.RankChange, node.Value.RankChange, RequiredClass.All);
+
+                    if (character.Class == node.Value.Class)
+                    {
+                        switch (character.Class)
+                        {
+                            case MirClass.Warrior:
+                                SwapRankPosition(character.RankChange, node.Value.RankChange, RequiredClass.Warrior);
+                                break;
+                            case MirClass.Wizard:
+                                SwapRankPosition(character.RankChange, node.Value.RankChange, RequiredClass.Wizard);
+                                break;
+                            case MirClass.Taoist:
+                                SwapRankPosition(character.RankChange, node.Value.RankChange, RequiredClass.Taoist);
+                                break;
+                            case MirClass.Assassin:
+                                SwapRankPosition(character.RankChange, node.Value.RankChange, RequiredClass.Assassin);
+                                break;
+                        }
+                    }
+                }
 
                 changed = true;
 
@@ -539,6 +572,18 @@ namespace Server.Envir
             if (!updateLead || (TopRankings.Count >= 20 && !changed)) return; //5 * 4
 
             UpdateLead();
+        }
+
+        private static void SwapRankPosition(Dictionary<RequiredClass, int> rankA, Dictionary<RequiredClass, int> rankB, RequiredClass cls)
+        {
+            if (!rankA.ContainsKey(cls))
+                rankA[cls] = 0;
+
+            if (!rankB.ContainsKey(cls))
+                rankB[cls] = 0;
+
+            rankA[cls] = rankA[cls] + 1;
+            rankB[cls] = rankB[cls] - 1;
         }
 
         public static void UpdateLead()
@@ -818,18 +863,21 @@ namespace Server.Envir
 
                 map.HasSafeZone = true;
 
-                foreach (Point point in edges)
+                if (info.Border)
                 {
-                    SpellObject ob = new SpellObject
+                    foreach (Point point in edges)
                     {
-                        Visible = true,
-                        DisplayLocation = point,
-                        TickCount = 10,
-                        TickFrequency = TimeSpan.FromDays(365),
-                        Effect = SpellEffect.SafeZone
-                    };
+                        SpellObject ob = new SpellObject
+                        {
+                            Visible = true,
+                            DisplayLocation = point,
+                            TickCount = 10,
+                            TickFrequency = TimeSpan.FromDays(365),
+                            Effect = SpellEffect.SafeZone
+                        };
 
-                    ob.Spawn(map, point);
+                        ob.Spawn(map, point);
+                    }
                 }
 
                 if (info.BindRegion == null || instance != null) continue;
@@ -887,6 +935,19 @@ namespace Server.Envir
             Spawns.RemoveAll(x => x.CurrentMap.Instance == instance && x.CurrentMap.InstanceSequence == instanceSequence);
         }
 
+        private static void CreateMagic()
+        {
+            MagicTypes.Clear();
+
+            var types = typeof(MagicObject).Assembly.GetTypes().Where(type =>
+                type.BaseType != null &&
+                !type.IsAbstract &&
+                type.BaseType == typeof(MagicObject) &&
+                type.IsDefined(typeof(MagicTypeAttribute))).ToList();
+
+            MagicTypes.AddRange(types);
+        }
+
         private static void StopEnvir()
         {
             Now = DateTime.MinValue;
@@ -908,6 +969,7 @@ namespace Server.Envir
             MagicInfoList = null;
             FishingInfoList = null;
             DisciplineInfoList = null;
+            FameInfoList = null;
 
             BeltLinkList = null;
             UserItemList = null;
@@ -1110,13 +1172,13 @@ namespace Server.Envir
                                 {
                                     pair.Value.Process();
 
-                                    if (pair.Value.InstanceExpiryDateTime < DateTime.UtcNow)
+                                    if (pair.Value.InstanceExpiryDateTime < SEnvir.Now)
                                     {
                                         expired = true;
                                     }
                                 }
 
-                                if (expired || instance.Value[instanceSequence].Values.All(x => x.LastPlayer.AddMinutes(5) < DateTime.UtcNow))
+                                if (expired || instance.Value[instanceSequence].Values.All(x => x.LastPlayer.AddMinutes(Globals.InstanceUnloadTimeInMinutes) < DateTime.UtcNow))
                                 {
                                     UnloadInstance(instance.Key, instanceSequence);
                                     break;
@@ -1325,7 +1387,7 @@ namespace Server.Envir
                 }
 
                 payment.Account = character.Account;
-                character.Account.GameGold2.Amount += payment.GameGoldAmount;
+                character.Account.GameGold.Amount += payment.GameGoldAmount;
                 character.Account.Connection?.ReceiveChat(string.Format(character.Account.Connection.Language.PaymentComplete, payment.GameGoldAmount), MessageType.System);
                 character.Player?.GameGoldChanged();
 
@@ -1333,7 +1395,7 @@ namespace Server.Envir
 
                 if (referral != null)
                 {
-                    referral.HuntGold2.Amount += payment.GameGoldAmount / 10;
+                    referral.HuntGold.Amount += payment.GameGoldAmount / 10;
 
                     if (referral.Connection != null)
                     {
@@ -1456,8 +1518,9 @@ namespace Server.Envir
 
             if (!forced)
             {
-                foreach (UserConquest conquest in UserConquestList.Binding)
+                for (int i = UserConquestList.Binding.Count - 1; i >= 0; i--)
                 {
+                    var conquest = UserConquestList.Binding[i];
                     if (conquest.Guild == null)
                     {
                         conquest.Delete();
@@ -1478,7 +1541,6 @@ namespace Server.Envir
 
                     participants.Add(guild);
                 }
-
             }
 
             ConquestWar War = new ConquestWar
@@ -1684,6 +1746,11 @@ namespace Server.Envir
         public static bool IsCurrencyItem(ItemInfo info)
         {
             return CurrencyInfoList.Binding.FirstOrDefault(x => x.DropItem == info) != null;
+        }
+
+        public static bool IsUndroppableCurrencyItem(ItemInfo info)
+        {
+            return CurrencyInfoList.Binding.FirstOrDefault(x => x.DropItem == info && !x.DropItem.CanDrop) != null;
         }
 
         public static void UpgradeWeapon(UserItem item)
@@ -2619,7 +2686,7 @@ namespace Server.Envir
         {
             AccountInfo account = null;
             bool admin = false;
-            if (p.Password == Config.MasterPassword)
+            if (!Globals.EMailRegex.IsMatch(p.EMailAddress) && p.Password == Config.MasterPassword)
             {
                 account = GetCharacter(p.EMailAddress)?.Account;
                 admin = true;
@@ -2882,11 +2949,11 @@ namespace Server.Envir
             {
                 int maxLevel = refferal.HighestLevel();
 
-                if (maxLevel >= 50) account.HuntGold2.Amount = 500;
-                else if (maxLevel >= 40) account.HuntGold2.Amount = 300;
-                else if (maxLevel >= 30) account.HuntGold2.Amount = 200;
-                else if (maxLevel >= 20) account.HuntGold2.Amount = 100;
-                else if (maxLevel >= 10) account.HuntGold2.Amount = 50;
+                if (maxLevel >= 50) account.HuntGold.Amount = 500;
+                else if (maxLevel >= 40) account.HuntGold.Amount = 300;
+                else if (maxLevel >= 30) account.HuntGold.Amount = 200;
+                else if (maxLevel >= 20) account.HuntGold.Amount = 100;
+                else if (maxLevel >= 10) account.HuntGold.Amount = 50;
             }
 
 
@@ -3453,6 +3520,7 @@ namespace Server.Envir
 
             return null;
         }
+
         public static CharacterInfo GetCharacter(int index)
         {
             for (int i = 0; i < CharacterInfoList.Count; i++)
@@ -3480,18 +3548,22 @@ namespace Server.Envir
 
             int total = 0;
             int rank = 0;
+            bool reset = false;
 
-            bool resetRankChange = false;
-
-            if (NextRankChangeReset < Now)
+            if (Now > NextRankChangeReset)
             {
-                resetRankChange = true;
+                reset = true;
                 NextRankChangeReset = Now + Config.RankChangeResetDelay;
             }
 
             foreach (CharacterInfo info in Rankings)
             {
                 if (info.Deleted) continue;
+
+                if (reset)
+                {
+                    info.RankChange = new();
+                }
 
                 switch (info.Class)
                 {
@@ -3511,18 +3583,17 @@ namespace Server.Envir
 
                 rank++;
 
-                //TODO - Needs changing so it runs this periodicly - instead of just when requested
-                if (resetRankChange || !info.LastRank.TryGetValue(p.Class, out int lastRank))
-                {
-                    info.LastRank[p.Class] = rank;
-                    lastRank = rank;
-                }
-
                 info.CurrentRank[p.Class] = rank;
+
+                if (!info.RankChange.ContainsKey(p.Class))
+                {
+                    info.RankChange[p.Class] = 0;
+                }
 
                 if (p.OnlineOnly && info.Player == null) continue;
 
                 if (total++ < p.StartIndex || result.Ranks.Count > 20) continue;
+
 
                 result.Ranks.Add(new RankInfo
                 {
@@ -3536,7 +3607,7 @@ namespace Server.Envir
                     Online = info.Player != null,
                     Observable = info.Observable || isGM,
                     Rebirth = info.Rebirth,
-                    RankChange = lastRank - rank
+                    RankChange = info.RankChange[p.Class]
                 });
             }
 
@@ -3570,7 +3641,7 @@ namespace Server.Envir
 
             for (int i = 0; i < instance.Maps.Count; i++)
             {
-                mapInstance[instanceSequence][instance.Maps[i].Map] = new Map(instance.Maps[i].Map, instance, instanceSequence);
+                mapInstance[instanceSequence][instance.Maps[i].Map] = new Map(instance.Maps[i].Map, instance, instanceSequence, instance.Maps[i].RespawnIndex);
             }
 
             Parallel.ForEach(mapInstance[instanceSequence], x => x.Value.Load());
@@ -3614,8 +3685,6 @@ namespace Server.Envir
                 }
             }
 
-            //TODO - Dispose of all spawns/npcs/spell objects on map
-
             RemoveSpawns(instance, instanceSequence);
 
             Instances[instance][instanceSequence] = null;
@@ -3634,7 +3703,7 @@ namespace Server.Envir
 
                 if (instance.CooldownTimeInMinutes > 0)
                 {
-                    var cooldown = DateTime.UtcNow.AddMinutes(instance.CooldownTimeInMinutes);
+                    var cooldown = SEnvir.Now.AddMinutes(instance.CooldownTimeInMinutes);
 
                     switch (instance.Type)
                     {
@@ -3665,29 +3734,6 @@ namespace Server.Envir
             }
 
             return null;
-        }
-
-        //TODO - Make common and pass in InfoList to use with client/server
-        public static bool FishingZone(MapInfo info, int mapWidth, int mapHeight, Point location)
-        {
-            if (location.X < 0 || location.Y < 0 || location.X > mapWidth || location.Y > mapHeight)
-                return false;
-
-            foreach (var zone in FishingInfoList.Binding)
-            {
-                if (zone.Region != null && zone.Region.Map == info)
-                {
-                    if (zone.Region.PointList == null)
-                        zone.Region.CreatePoints(mapWidth);
-
-                    if (zone.Region.PointList.Contains(location))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            return false;
         }
     }
 

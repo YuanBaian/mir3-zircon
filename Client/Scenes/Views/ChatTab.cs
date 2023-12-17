@@ -1,16 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using System.Windows.Forms;
-using Client.Controls;
+﻿using Client.Controls;
 using Client.Envir;
 using Client.UserModels;
 using Library;
-using static Client.Scenes.Views.NPCDialog;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
 using C = Library.Network.ClientPackets;
 
 namespace Client.Scenes.Views
@@ -31,6 +28,49 @@ namespace Client.Scenes.Views
 
         public List<DXLabel> ItemLabels = new List<DXLabel>();
         public List<ChatHistory> History = new List<ChatHistory>();
+
+        #region HideChat
+
+        public bool HideChat
+        {
+            get => _HideChat;
+            set
+            {
+                if (_HideChat == value) return;
+
+                bool oldValue = _HideChat;
+                _HideChat = value;
+
+                OnHideChatChanged(oldValue, value);
+            }
+        }
+        private bool _HideChat;
+        public event EventHandler<EventArgs> HideChatChanged;
+        public void OnHideChatChanged(bool oValue, bool nValue)
+        {
+            HideChatChanged?.Invoke(this, EventArgs.Empty);
+
+            if (!HideChat)
+            {
+                chatFade = 1F;
+
+                foreach (var item in History)
+                {
+                    item.Label.Opacity = chatFade;
+                }
+
+                foreach (var label in ItemLabels)
+                {
+                    label.Opacity = chatFade;
+                }
+            }
+        }
+
+        private float chatFade = 1F;
+        private DateTime nextFadeCheck;
+        private DateTime nextCleanUpCheck;
+
+        #endregion
 
         public override void OnSizeChanged(Size oValue, Size nValue)
         {
@@ -118,6 +158,95 @@ namespace Client.Scenes.Views
 
         #region Methods
 
+        public override void Process()
+        {
+            base.Process();
+
+            FadeOutChatHistory();
+            CleanUpChat();
+        }
+
+        //TODO - Make more efficient
+        private void FadeOutChatHistory()
+        {
+            if (!Panel.FadeOutCheckBox.Checked && chatFade == 1F)
+            {
+                return;
+            }
+
+            if (HideChat && nextFadeCheck < CEnvir.Now && chatFade > 0F)
+            {
+                chatFade -= 0.2F;
+
+                chatFade = Math.Max(0F, chatFade);
+
+                foreach (var item in History)
+                {
+                    item.Label.Opacity = chatFade;
+                }
+
+                foreach (var label in ItemLabels)
+                {
+                    label.Opacity = chatFade;
+                }
+
+                nextFadeCheck = CEnvir.Now.AddMilliseconds(100);
+                return;
+            }
+
+            bool hideChat = false;
+
+            DXTabControl tab = TabButton.Parent as DXTabControl;
+
+            if (tab.SelectedTab == this && !GameScene.Game.ChatOptionsBox.Visible &&
+                GameScene.Game.ChatTextBox.TextBox != DXTextBox.ActiveTextBox && 
+                Panel.FadeOutCheckBox.Checked && Panel.TransparentCheckBox.Checked)
+            {
+                var newest = History.LastOrDefault();
+
+                if (newest != null && newest.SentDate < CEnvir.Now.AddSeconds(-10))
+                {
+                    hideChat = true;
+                }
+            }
+
+            HideChat = hideChat;
+        }
+
+        private void CleanUpChat()
+        {
+            if (nextCleanUpCheck < CEnvir.Now)
+            {
+                if (Panel.CleanUpCheckBox.Checked)
+                {
+                    bool chatCleaned = false;
+                    for (int i = History.Count - 1; i >= 0; i--)
+                    {
+                        var history = History[i];
+
+                        TimeSpan timeDifference = CEnvir.Now - History[i].SentDate;
+
+                        if (timeDifference > TimeSpan.FromSeconds(5) && history.Action == MessageAction.None)
+                        {
+                            history.Dispose();
+
+                            if (History.Contains(history))
+                                History.RemoveAt(i);
+
+                            chatCleaned = true;
+                        }
+                    }
+
+                    if (chatCleaned)
+                    {
+                        UpdateItems();
+                    }
+                }
+
+                nextCleanUpCheck = DateTime.UtcNow.AddSeconds(1);
+            }
+        }
+
         public void ResizeChat()
         {
             if (!IsResizing)
@@ -136,16 +265,46 @@ namespace Client.Scenes.Views
                 UpdateScrollBar();
             }
         }
-        public void UpdateItems()
-        {
-            int y = -ScrollBar.Value;
 
-            foreach (DXLabel control in History.Select(x => x.Label))
+        public void UpdateItems(bool updated = true)
+        {
+            if (Panel == null) return;
+
+            if (Panel.ReverseListCheckBox.Checked)
             {
-                control.Location = new Point(0, y);
-                y += control.Size.Height;
+                if (updated)
+                {
+                    int y = Size.Height - 20 + ScrollBar.Value;
+
+                    for (int i = 0; i < History.Count; i++)
+                    {
+                        var label = History[i].Label;
+                        y -= label.Size.Height;
+                        label.Location = new Point(0, y);
+                    }
+                }
+
+                ScrollBar.Value = Math.Max(ScrollBar.MinValue, Math.Min(ScrollBar.MaxValue - ScrollBar.VisibleSize, ScrollBar.MaxValue));
             }
-            ProcessLinkedItems();
+            else
+            {
+                if (updated)
+                {
+                    int y = -ScrollBar.Value;
+
+                    for (int i = 0; i < History.Count; i++)
+                    {
+                        var label = History[i].Label;
+                        label.Location = new Point(0, y);
+                        y += label.Size.Height;
+                    }
+                }
+            }
+
+            if (updated)
+            {
+                ProcessLinkedItems();
+            }
         }
 
         public void UpdateScrollBar()
@@ -166,6 +325,8 @@ namespace Client.Scenes.Views
 
             switch (type)
             {
+                case MessageType.Announcement:
+                    break;
                 case MessageType.Normal:
                     if (!Panel.LocalCheckBox.Checked) return;
                     break;
@@ -235,7 +396,7 @@ namespace Client.Scenes.Views
             Size size = DXLabel.GetHeight(label, TextPanel.Size.Width);
             label.Size = new Size(size.Width, size.Height);
 
-            History.Add(new ChatHistory() { Message = message, Label = label, LinkedItems = linkedItems });
+            History.Add(new ChatHistory { Message = message, Label = label, LinkedItems = linkedItems, SentDate = CEnvir.Now });
 
             while (History.Count > 250)
             {
@@ -253,7 +414,8 @@ namespace Client.Scenes.Views
             {
                 ScrollBar.Value = ScrollBar.MaxValue - label.Size.Height;
             }
-            else UpdateItems();
+
+            UpdateItems(update);
         }
         public void ReceiveChat(MessageAction action, params object[] args)
         {
@@ -294,7 +456,7 @@ namespace Client.Scenes.Views
             Size size = DXLabel.GetHeight(label, TextPanel.Size.Width);
             label.Size = new Size(size.Width, size.Height);
 
-            History.Add(new ChatHistory() { Message = label.Text, Label = label });
+            History.Add(new ChatHistory { Message = label.Text, Label = label, SentDate = CEnvir.Now, Action = action });
 
             while (History.Count > 250)
             {
@@ -308,12 +470,12 @@ namespace Client.Scenes.Views
 
             UpdateScrollBar();
 
-
             if (update)
             {
                 ScrollBar.Value = ScrollBar.MaxValue - label.Size.Height;
             }
-            else UpdateItems();
+
+            UpdateItems(update);
         }
         public void UpdateColours()
         {
@@ -322,66 +484,73 @@ namespace Client.Scenes.Views
         }
         private void UpdateColours(DXLabel label)
         {
-            Color empty = Panel?.TransparentCheckBox.Checked == true ? Color.FromArgb(100, 0, 0, 0) : Color.Empty;
-
             switch ((MessageType)label.Tag)
             {
                 case MessageType.Normal:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.LocalTextColour;
+                    label.BackColour = GetBackColour(Config.LocalTextBackColour);
+                    label.ForeColour = Config.LocalTextForeColour;
                     break;
                 case MessageType.Shout:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.ShoutTextColour;
+                    label.BackColour = GetBackColour(Config.ShoutTextBackColour);
+                    label.ForeColour = Config.ShoutTextForeColour;
                     break;
                 case MessageType.Group:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.GroupTextColour;
+                    label.BackColour = GetBackColour(Config.GroupTextBackColour);
+                    label.ForeColour = Config.GroupTextForeColour;
                     break;
                 case MessageType.Global:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.GlobalTextColour;
+                    label.BackColour = GetBackColour(Config.GlobalTextBackColour);
+                    label.ForeColour = Config.GlobalTextForeColour;
                     break;
                 case MessageType.Hint:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.HintTextColour;
+                    label.BackColour = GetBackColour(Config.HintTextBackColour);
+                    label.ForeColour = Config.HintTextForeColour;
                     break;
                 case MessageType.System:
-                    label.BackColour = Color.FromArgb(200, 255, 255, 255);
-                    label.ForeColour = Config.SystemTextColour;
+                    label.BackColour = GetBackColour(Config.SystemTextBackColour);
+                    label.ForeColour = Config.SystemTextForeColour;
                     break;
                 case MessageType.Announcement:
-                    label.BackColour = Color.FromArgb(200, 255, 255, 255);
-                    label.ForeColour = Config.AnnouncementTextColour;
+                    label.BackColour = GetBackColour(Config.AnnouncementTextBackColour);
+                    label.ForeColour = Config.AnnouncementTextForeColour;
                     break;
                 case MessageType.WhisperIn:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.WhisperInTextColour;
+                    label.BackColour = GetBackColour(Config.WhisperInTextBackColour);
+                    label.ForeColour = Config.WhisperInTextForeColour;
                     break;
                 case MessageType.GMWhisperIn:
-                    label.BackColour = Color.FromArgb(200, 255, 255, 255);
-                    label.ForeColour = Config.GMWhisperInTextColour;
+                    label.BackColour = GetBackColour(Config.GMWhisperInTextBackColour);
+                    label.ForeColour = Config.GMWhisperInTextForeColour;
                     break;
                 case MessageType.WhisperOut:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.WhisperOutTextColour;
+                    label.BackColour = GetBackColour(Config.WhisperOutTextBackColour);
+                    label.ForeColour = Config.WhisperOutTextForeColour;
                     break;
                 case MessageType.Combat:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.GainsTextColour;
+                    label.BackColour = GetBackColour(Config.GainsTextBackColour);
+                    label.ForeColour = Config.GainsTextForeColour;
                     break;
                 case MessageType.ObserverChat:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.ObserverTextColour;
+                    label.BackColour = GetBackColour(Config.ObserverTextBackColour);
+                    label.ForeColour = Config.ObserverTextForeColour;
                     break;
                 case MessageType.Guild:
-                    label.BackColour = empty;
-                    label.ForeColour = Config.GuildTextColour;
+                    label.BackColour = GetBackColour(Config.GuildTextBackColour);
+                    label.ForeColour = Config.GuildTextForeColour;
                     break;
             }
-
-
         }
+
+        private Color GetBackColour(Color color)
+        {
+            if (Panel?.TransparentCheckBox.Checked == true && color == Color.FromArgb(0, 0, 0, 0))
+            {
+                return Color.FromArgb(100, 0, 0, 0);
+            }
+
+            return color;
+        }
+
         public void TransparencyChanged()
         {
             if (Panel.TransparentCheckBox.Checked)
@@ -483,6 +652,8 @@ namespace Client.Scenes.Views
                 {
                     newlabel.MouseEnter += (o, e) =>
                     {
+                        if (chatFade == 0F) return;
+
                         GameScene.Game.MouseItem = item;
                         foreach (DXLabel l in labels)
                             l.ForeColour = Color.Red;
@@ -581,6 +752,9 @@ namespace Client.Scenes.Views
         public string Message;
         public DXLabel Label;
         public List<ClientUserItem> LinkedItems;
+        public DateTime SentDate;
+
+        public MessageAction Action;
 
         public void Dispose()
         {

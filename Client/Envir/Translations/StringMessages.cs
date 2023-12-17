@@ -31,6 +31,7 @@ namespace Client.Envir.Translations
         public abstract string WeaponEnergyFlamingSword { get; set; }
         public abstract string WeaponEnergyDragonRise { get; set; }
         public abstract string WeaponEnergyBladeStorm { get; set; }
+        public abstract string WeaponEnergyDefensiveBlow { get; set; }
         public abstract string LevelIncreased { get; set; }
         public abstract string GainedExperience { get; set; }
         public abstract string LostExperience { get; set; }
@@ -54,8 +55,8 @@ namespace Client.Envir.Translations
         public abstract string DoNotUseThrusting { get; set; }
         public abstract string UseHalfMoon { get; set; }
         public abstract string DoNotUseHalfMoon { get; set; }
-        public abstract string UseDestructiveBlow { get; set; }
-        public abstract string DoNotUseDestructiveBlow { get; set; }
+        public abstract string UseDestructiveSurge { get; set; }
+        public abstract string DoNotUseDestructiveSurge { get; set; }
         public abstract string UseFlameSplash { get; set; }
         public abstract string DoNotUseFlameSplash { get; set; }
         public abstract string GameSceneAutoRunOn { get; set; }
@@ -121,6 +122,8 @@ namespace Client.Envir.Translations
         public abstract string CommonControlColourPickerGreenLabel { get; set; }
         public abstract string CommonControlColourPickerBlueLabel { get; set; }
         public abstract string CommonControlColourPickerColourLabel { get; set; }
+        public abstract string CommonControlColourPickerNoneLabel { get; set; }
+        public abstract string CommonControlColourPickerEmptyLabel { get; set; }
         public abstract string CommonControlConfigWindowTitle { get; set; }
         public abstract string CommonControlConfigWindowGraphicsTabLabel { get; set; }
         public abstract string CommonControlConfigWindowSoundTabLabel { get; set; }
@@ -352,6 +355,10 @@ namespace Client.Envir.Translations
         public abstract string ChatOptionsPanelChatNameLabel { get; set; }
         public abstract string ChatOptionsPanelTransparentLabel { get; set; }
         public abstract string ChatOptionsPanelShowAlertLabel { get; set; }
+        public abstract string ChatOptionsPanelHideTabLabel { get; set; }
+        public abstract string ChatOptionsPanelReverseLabel { get; set; }
+        public abstract string ChatOptionsPanelCleanUpLabel { get; set; }
+        public abstract string ChatOptionsPanelFadeOutLabel { get; set; }
         public abstract string ChatOptionsPanelLocalChatLabel { get; set; }
         public abstract string ChatOptionsPanelWhisperChatLabel { get; set; }
         public abstract string ChatOptionsPanelGroupChatLabel { get; set; }
@@ -441,10 +448,8 @@ namespace Client.Envir.Translations
         public abstract string GroupDialogAllowGroupButtonAllowingHint { get; set; }
         public abstract string GroupDialogAllowGroupButtonNotAllowingHint { get; set; }
         public abstract string GroupDialogMemberTabLabel { get; set; }
-        public abstract string GroupDialogAddButtonLabel { get; set; }
         public abstract string GroupDialogAddButtonConfirmMessage { get; set; }
         public abstract string GroupDialogAddButtonConfirmCaption { get; set; }
-        public abstract string GroupDialogRemoveButtonLabel { get; set; }
 
         public abstract string GuildDialogTitle { get; set; }
         public abstract string GuildDialogCreateTabLabel { get; set; }
@@ -472,32 +477,30 @@ namespace Client.Envir.Translations
         public abstract string GuildDialogHomeTabNoticeStatsTodaysGrowthLabel { get; set; }
         public abstract string GuildDialogHomeTabNoticeStatsTotalContributionLabel { get; set; }
         public abstract string GuildDialogHomeTabNoticeStatsTodaysContributionLabel { get; set; }
+        public abstract string GuildDialogHomeTabNoticeStatsTaxLabel { get; set; }
         public abstract string GuildDialogMembersTabLabel { get; set; }
         public abstract string GuildDialogStorageTabLabel { get; set; }
         public abstract string GuildDialogStorageTabNameLabel { get; set; }
         public abstract string GuildDialogStorageTabItemLabel { get; set; }
         public abstract string GuildDialogStorageTabClearButtonLabel { get; set; }
-        public abstract string GuildDialogManageTabLabel { get; set; }
+        public abstract string GuildDialogWarTabLabel { get; set; }
         public abstract string GuildDialogManageTabMembershipLabel { get; set; }
-        public abstract string GuildDialogManageTabMembershipMemberLabel { get; set; }
+        public abstract string GuildDialogManageTabMembershipMemberConfirmMessage { get; set; }
+        public abstract string GuildDialogManageTabMembershipIncreaseMemberConfirmMessage { get; set; }
         public abstract string GuildDialogManageTabMembershipAddButtonLabel { get; set; }
         public abstract string GuildDialogManageTabMembershipEditDefaultButtonLabel { get; set; }
         public abstract string GuildDialogManageTabTreasuryLabel { get; set; }
-        public abstract string GuildDialogManageTabTreasuryGuildTaxLabel { get; set; }
-        public abstract string GuildDialogManageTabTreasuryPercentLabel { get; set; }
         public abstract string GuildDialogManageTabTreasuryChangeButtonLabel { get; set; }
-        public abstract string GuildDialogManageTabTreasuryBalanceLabel { get; set; }
-        public abstract string GuildDialogManageTabUpgradeLabel { get; set; }
-        public abstract string GuildDialogManageTabUpgradeMembersLabel { get; set; }
-        public abstract string GuildDialogManageTabUpgradeMembersIncreaseButtonLabel { get; set; }
-        public abstract string GuildDialogManageTabUpgradeMembersLimitLabel { get; set; }
+        public abstract string GuildDialogManageTabTreasuryTaxConfirmMessage { get; set; }
+       
+        public abstract string GuildDialogManageTabMembershipMembersIncreaseButtonLabel { get; set; }
+        
         public abstract string GuildDialogManageTabUpgradeStorageLabel { get; set; }
         public abstract string GuildDialogManageTabUpgradeStorageIncreaseButtonLabel { get; set; }
-        public abstract string GuildDialogManageTabUpgradeStorageLimitLabel { get; set; }
-        public abstract string GuildDialogManageTabGuildWarLabel { get; set; }
-        public abstract string GuildDialogManageTabGuildWarGuildLabel { get; set; }
-        public abstract string GuildDialogManageTabGuildWarStartWarButtonLabel { get; set; }
-        public abstract string GuildDialogManageTabGuildWarCostLabel { get; set; }
+        public abstract string GuildDialogManageTabUpgradeStorageConfirmMessage { get; set; }
+
+        public abstract string GuildDialogWarTabGuildWarStartWarButtonLabel { get; set; }
+        public abstract string GuildDialogWarTabGuildWarConfirmMessage { get; set; }
         public abstract string GuildMemberRowNameLabel { get; set; }
         public abstract string GuildMemberRowRankLabel { get; set; }
         public abstract string GuildMemberRowTotalLabel { get; set; }

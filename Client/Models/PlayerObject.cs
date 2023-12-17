@@ -1,14 +1,14 @@
 ﻿
-using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Linq;
 using Client.Envir;
 using Client.Models.Player;
 using Client.Scenes;
 using Library;
 using SlimDX;
 using SlimDX.Direct3D9;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
 using Frame = Library.Frame;
 using S = Library.Network.ServerPackets;
 
@@ -233,7 +233,6 @@ namespace Client.Models
         public Color ArmourColour;
         public int ArmourFrame => DrawFrame + (CostumeShape >= 0 ? (CostumeShape % 10) : (ArmourShape % 11)) * ArmourShapeOffSet + ArmourShift;
 
-
         public MirLibrary HorseLibrary, HorseShapeLibrary, HorseShapeLibrary2;
         public int HorseShape;
         public int HorseFrame => DrawFrame + ((int)Horse - 1) * 5000;
@@ -412,6 +411,15 @@ namespace Client.Models
                                 ArmourShape = 0;
                             }
 
+                            if (CostumeShape >= 0)
+                            {
+                                if (!CostumeList.TryGetValue(CostumeShape / 10 + FemaleOffSet, out file))
+                                {
+                                    file = LibraryFile.WM_Hum;
+                                    ArmourShape = 0;
+                                }
+                            }
+
                             CEnvir.LibraryList.TryGetValue(file, out BodyLibrary);
 
                             CEnvir.LibraryList.TryGetValue(LibraryFile.WM_Hair, out HairLibrary);
@@ -539,6 +547,10 @@ namespace Client.Models
                         animation = MirAnimation.DragonRepulseMiddle;
                     else if (CurrentAnimation == MirAnimation.DragonRepulseMiddle)
                         animation = MirAnimation.DragonRepulseEnd;
+
+                    if (VisibleBuffs.Contains(BuffType.ElementalHurricane))
+                        animation = MirAnimation.ChannellingMiddle;
+
                     break;
                 case MirAction.Moving:
                     //if(VisibleBuffs.Contains(BuffType.Stealth))
@@ -587,12 +599,16 @@ namespace Client.Models
 
                     if (type == MagicType.PoisonousCloud)
                         DrawWeapon = false;
+
+                    if (VisibleBuffs.Contains(BuffType.ElementalHurricane))
+                        animation = MirAnimation.ChannellingEnd;
+
                     break;
-                // case MirAction.Struck:
-                //    animation = MirAnimation.Struck;
-                // if (Horse != HorseType.None)
-                //    animation = MirAnimation.HorseStruck;
-                //break;
+                case MirAction.Struck:
+                    animation = MirAnimation.Struck;
+                    if (Horse != HorseType.None)
+                        animation = MirAnimation.HorseStruck;
+                    break;
                 case MirAction.Die:
                     animation = MirAnimation.Die;
                     break;
@@ -807,6 +823,43 @@ namespace Client.Models
 
             switch (CurrentAction)
             {
+                case MirAction.Spell:
+                    switch (MagicType)
+                    {
+                        case MagicType.SeismicSlam:
+                            if (FrameIndex == 4)
+                            {
+                                Effects.Add(new MirEffect(700, 7, TimeSpan.FromMilliseconds(120), LibraryFile.MonMagicEx7, 10, 35, Globals.LightningColour)
+                                {
+                                    Blend = true,
+                                    MapTarget = Functions.Move(CurrentLocation, Direction, 2),
+                                });
+                            }
+                            break;
+                        case MagicType.CrushingWave:
+                            if (FrameIndex == 4)
+                            {
+                                MirEffect spell;
+                                Effects.Add(spell = new MirProjectile(200, 8, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx6, 35, 35, Globals.LightningColour, CurrentLocation)
+                                {
+                                    Blend = true,
+                                    Has16Directions = false,
+                                    MapTarget = Functions.Move(CurrentLocation, Direction, Globals.MagicRange),
+                                    //Speed = 100,
+                                });
+                                spell.Process();
+                                DXSoundManager.Play(SoundIndex.DestructiveSurge);
+
+                                Effects.Add(new MirEffect(300, 9, TimeSpan.FromMilliseconds(150), LibraryFile.MagicEx6, 10, 35, Globals.LightningColour)
+                                {
+                                    Blend = true,
+                                    Direction = Direction,
+                                    MapTarget = Functions.Move(CurrentLocation, Direction, 1),
+                                });
+                            }
+                            break;
+                    }
+                    break;
                 case MirAction.Fishing:
                     if (FrameIndex != 1) return;
 
@@ -1127,17 +1180,29 @@ namespace Client.Models
         {
             if (this == User && !Config.ShowUserHealth) return;
 
-            ClientObjectData data;
-            if (!GameScene.Game.DataDictionary.TryGetValue(ObjectID, out data)) return;
+            if (!GameScene.Game.DataDictionary.TryGetValue(ObjectID, out ClientObjectData data)) return;
 
             if (!GameScene.Game.IsAlly(ObjectID) && User.Buffs.All(x => x.Type != BuffType.Developer)) return;
 
+            if (this == User && User.Buffs.Any(x => x.Type == BuffType.SuperiorMagicShield))
+            {
+                if (!CEnvir.LibraryList.TryGetValue(LibraryFile.Interface, out MirLibrary library)) return;
+
+                float percent = Math.Min(1, Math.Max(0, User.Buffs.First(x => x.Type == BuffType.SuperiorMagicShield).Stats[Stat.SuperiorMagicShield] / (float)User.MaximumSuperiorMagicShield));
+
+                if (percent == 0) return;
+
+                Size size = library.GetSize(79);
+
+                Color color = Color.Goldenrod;
+
+                library.Draw(80, DrawX, DrawY - 59, Color.White, false, 1F, ImageType.Image);
+                library.Draw(79, DrawX + 1, DrawY - 59 + 1, color, new Rectangle(0, 0, (int)(size.Width * percent), size.Height), 1F, ImageType.Image);
+            }
+
             if (data.MaxHealth > 0)
             {
-                MirLibrary library;
-
-                if (!CEnvir.LibraryList.TryGetValue(LibraryFile.Interface, out library)) return;
-
+                if (!CEnvir.LibraryList.TryGetValue(LibraryFile.Interface, out MirLibrary library)) return;
 
                 float percent = Math.Min(1, Math.Max(0, data.Health / (float)data.MaxHealth));
 
@@ -1153,10 +1218,7 @@ namespace Client.Models
 
             if (data.MaxMana > 0)
             {
-                MirLibrary library;
-
-                if (!CEnvir.LibraryList.TryGetValue(LibraryFile.Interface, out library)) return;
-
+                if (!CEnvir.LibraryList.TryGetValue(LibraryFile.Interface, out MirLibrary library)) return;
 
                 float percent = Math.Min(1, Math.Max(0, data.Mana / (float)data.MaxMana));
 
@@ -1165,7 +1227,6 @@ namespace Client.Models
                 Size size = library.GetSize(79);
 
                 Color color = Color.DodgerBlue;
-
 
                 library.Draw(80, DrawX, DrawY - 51, Color.White, false, 1F, ImageType.Image);
                 library.Draw(79, DrawX + 1, DrawY - 51 + 1, color, new Rectangle(0, 0, (int)(size.Width * percent), size.Height), 1F, ImageType.Image);
