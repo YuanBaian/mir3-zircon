@@ -160,11 +160,15 @@ namespace Client.Scenes.Views
 
                     DXTextBox.ActiveTextBox = null;
                     TextBox.TextBox.Text = string.Empty;
+
+                    ToggleVisibility(e, true);
                     break;
                 case (char)Keys.Escape:
                     e.Handled = true;
                     DXTextBox.ActiveTextBox = null;
                     TextBox.TextBox.Text = string.Empty;
+
+                    ToggleVisibility(e, false);
                     break;
             }
         }
@@ -208,6 +212,32 @@ namespace Client.Scenes.Views
                     TextBox.TextBox.SelectionStart = TextBox.TextBox.Text.Length;
                     e.Handled = true;
                     break;
+            }
+        }
+
+        public void ToggleVisibility(KeyPressEventArgs e, bool hide)
+        {
+            if (Config.HideChatBar)
+            {
+                if (Visible)
+                {
+                    if (hide)
+                    {
+                        if (ChatTab.Tabs.Count > 0 && ChatTab.Tabs[0].Panel.TransparentCheckBox.Checked == true)
+                        {
+                            Visible = false;
+                        }
+                    }
+                }
+                else
+                {
+                    if (!hide)
+                    {
+                        Visible = true;
+
+                        OnKeyPress(e);
+                    }
+                }
             }
         }
 

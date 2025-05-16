@@ -12,6 +12,7 @@ using System.Drawing;
 using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
+using static System.Net.Mime.MediaTypeNames;
 using C = Library.Network.ClientPackets;
 using S = Library.Network.ServerPackets;
 
@@ -126,6 +127,22 @@ namespace Client.Scenes.Views
             }
         }
 
+        public int GuildFlag
+        {
+            get
+            {
+                return Inspect ? _inspectGuildFlag : GameScene.Game.GuildBox.GuildInfo?.Flag ?? -1;
+            }
+        }
+
+        public Color GuildColour
+        {
+            get
+            {
+                return Inspect ? _inspectGuildColour : GameScene.Game.GuildBox.GuildInfo?.Colour ?? Color.Empty;
+            }
+        }
+
         private bool HideHead
         {
             get
@@ -164,6 +181,8 @@ namespace Client.Scenes.Views
         public Color _inspectHairColour;
         public int _inspectLevel;
         public int _inspectFame;
+        public int _inspectGuildFlag;
+        public Color _inspectGuildColour;
 
         #endregion
 
@@ -206,6 +225,11 @@ namespace Client.Scenes.Views
                     }
                     break;
             }
+        }
+
+        public void OnHermitChanged(bool hermitEnabled)
+        {
+            HermitTab.TabButton.Visible = !Inspect && hermitEnabled;
         }
 
         #endregion
@@ -289,20 +313,6 @@ namespace Client.Scenes.Views
                 Index = Inspect ? 115 : 110;
             };
 
-            HermitTab = new DXTab
-            {
-                Parent = TabControl,
-                TabButton = { Label = { Text = CEnvir.Language.CharacterHermitTabLabel } },
-                BackColour = Color.Empty,
-                Location = new Point(0, 26),
-            };
-
-            HermitTab.TabButton.Visible = !Inspect;
-            HermitTab.TabButton.MouseClick += (o, e) =>
-            {
-                Index = 111;
-            };
-
             DisciplineTab = new DXTab
             {
                 Parent = TabControl,
@@ -315,6 +325,20 @@ namespace Client.Scenes.Views
             DisciplineTab.TabButton.MouseClick += (o, e) =>
             {
                 Index = 112;
+            };
+
+            HermitTab = new DXTab
+            {
+                Parent = TabControl,
+                TabButton = { Label = { Text = CEnvir.Language.CharacterHermitTabLabel } },
+                BackColour = Color.Empty,
+                Location = new Point(0, 26),
+            };
+
+            HermitTab.TabButton.Visible = !Inspect && GameScene.Game.HermitEnabled;
+            HermitTab.TabButton.MouseClick += (o, e) =>
+            {
+                Index = 111;
             };
 
             DXControl namePanel = new DXControl
@@ -330,7 +354,7 @@ namespace Client.Scenes.Views
                 ForeColour = Color.FromArgb(222, 255, 222),
                 Outline = false,
                 Parent = namePanel,
-                Font = new Font(Config.FontName, CEnvir.FontSize(9F), FontStyle.Bold),
+                Font = new System.Drawing.Font(Config.FontName, CEnvir.FontSize(9F), FontStyle.Bold),
                 DrawFormat = TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter
             };
             GuildNameLabel = new DXLabel
@@ -581,6 +605,7 @@ namespace Client.Scenes.Views
                 Size = new Size(36, 75)
             };
             cell.BeforeDraw += (o, e) => Draw((DXItemCell)o, 39);
+            cell.AfterDraw += (o, e) => DrawAfter((DXItemCell)o);
             cell.MouseEnter += Cell_MouseEnter;
             cell.MouseLeave += Cell_MouseLeave;
 
@@ -632,7 +657,14 @@ namespace Client.Scenes.Views
             StatsAttackTab = new DXTab
             {
                 Parent = StatsTabControl,
-                TabButton = { Label = { Text = CEnvir.Language.CharacterCharacterTabStatsAttackTabLabel } },
+                TabButton =
+                { 
+                    Label =
+                    {
+                        Text = CEnvir.Language.CharacterCharacterTabStatsAttackTabLabel
+                    },
+                    Hint = CEnvir.Language.CharacterCharacterTabStatsAttackTabHint
+                },
                 BackColour = Color.Empty,
                 MinimumTabWidth = 40,
                 Location = new Point(0, 22),
@@ -641,7 +673,14 @@ namespace Client.Scenes.Views
             StatsDefenseTab = new DXTab
             {
                 Parent = StatsTabControl,
-                TabButton = { Label = { Text = CEnvir.Language.CharacterCharacterTabStatsDefenseTabLabel } },
+                TabButton =
+                { 
+                    Label =
+                    {
+                        Text = CEnvir.Language.CharacterCharacterTabStatsDefenseTabLabel
+                    },
+                    Hint = CEnvir.Language.CharacterCharacterTabStatsDefenseTabHint
+                },
                 BackColour = Color.Empty,
                 MinimumTabWidth = 40,
                 Location = new Point(0, 22),
@@ -649,7 +688,14 @@ namespace Client.Scenes.Views
             StatsWeightTab = new DXTab
             {
                 Parent = StatsTabControl,
-                TabButton = { Label = { Text = CEnvir.Language.CharacterCharacterTabStatsWeightTabLabel } },
+                TabButton =
+                { 
+                    Label =
+                    {
+                        Text = CEnvir.Language.CharacterCharacterTabStatsWeightTabLabel
+                    },
+                    Hint = CEnvir.Language.CharacterCharacterTabStatsWeightTabHint
+                },
                 BackColour = Color.Empty,
                 MinimumTabWidth = 40,
                 Location = new Point(0, 22),
@@ -657,7 +703,14 @@ namespace Client.Scenes.Views
             StatsOtherTab = new DXTab
             {
                 Parent = StatsTabControl,
-                TabButton = { Label = { Text = CEnvir.Language.CharacterCharacterTabStatsOtherTabLabel } },
+                TabButton =
+                { 
+                    Label =
+                    {
+                        Text = CEnvir.Language.CharacterCharacterTabStatsOtherTabLabel            
+                    },
+                    Hint = CEnvir.Language.CharacterCharacterTabStatsOtherTabHint
+                },
                 BackColour = Color.Empty,
                 MinimumTabWidth = 40,
                 Location = new Point(0, 22),
@@ -665,7 +718,14 @@ namespace Client.Scenes.Views
             StatsElementAttackTab = new DXTab
             {
                 Parent = StatsTabControl,
-                TabButton = { Label = { Text = CEnvir.Language.CommonStatusElementAttack } },
+                TabButton =
+                { 
+                    Label =
+                    {
+                        Text = CEnvir.Language.CharacterCharacterTabStatsElementAttackTabLabel    
+                    },
+                    Hint = CEnvir.Language.CharacterCharacterTabStatsElementAttackTabHint
+                },
                 BackColour = Color.Empty,
                 MinimumTabWidth = 40,
                 Location = new Point(0, 22),
@@ -673,7 +733,14 @@ namespace Client.Scenes.Views
             StatsElementAdvantageTab = new DXTab
             {
                 Parent = StatsTabControl,
-                TabButton = { Label = { Text = CEnvir.Language.CharacterCharacterTabStatsElementAdvantageTabLabel } },
+                TabButton =
+                { 
+                    Label =
+                    {
+                        Text = CEnvir.Language.CharacterCharacterTabStatsElementAdvantageTabLabel    
+                    },
+                    Hint = CEnvir.Language.CharacterCharacterTabStatsElementAdvantageTabHint
+                },
                 BackColour = Color.Empty,
                 MinimumTabWidth = 40,
                 Location = new Point(0, 22),
@@ -681,7 +748,14 @@ namespace Client.Scenes.Views
             StatsElementDisadvantageTab = new DXTab
             {
                 Parent = StatsTabControl,
-                TabButton = { Label = { Text = CEnvir.Language.CharacterCharacterTabStatsElementDisadvantageTabLabel } },
+                TabButton = 
+                { 
+                    Label = 
+                    { 
+                        Text = CEnvir.Language.CharacterCharacterTabStatsElementDisadvantageTabLabel                
+                    },
+                    Hint = CEnvir.Language.CharacterCharacterTabStatsElementDisadvantageTabHint
+                },
                 BackColour = Color.Empty,
                 MinimumTabWidth = 40,
                 Location = new Point(0, 22),
@@ -2539,13 +2613,34 @@ namespace Client.Scenes.Views
                     }
                 }
             }
+            if (Inspect && GuildFlag > -1)
+            {
+                if (CEnvir.LibraryList.TryGetValue(LibraryFile.GameInter, out MirLibrary gameLibrary))
+                {
+                    var guildFlag = 1690 + GuildFlag;
+
+                    var flagImage = gameLibrary.CreateImage(guildFlag, ImageType.Image);
+                    var flagOverlay = gameLibrary.CreateImage(guildFlag, ImageType.Overlay);
+
+                    var flagX = x - 100;
+                    var flagY = 105;
+
+                    if (flagImage != null)
+                    {
+                        PresentTexture(flagImage.Image, CharacterTab, new Rectangle(DisplayArea.X + flagX + flagImage.OffSetX, DisplayArea.Y + flagY + flagImage.OffSetY, flagImage.Width, flagImage.Height), ForeColour, this);
+                    }
+
+                    if (flagOverlay != null)
+                    {
+                        PresentTexture(flagOverlay.Overlay, CharacterTab, new Rectangle(DisplayArea.X + flagX + flagOverlay.OffSetX, DisplayArea.Y + flagY + flagOverlay.OffSetY, flagOverlay.Width, flagOverlay.Height), GuildColour, this);
+                    }
+                }
+            }
 
             if (HideHead) return;
-
             if (helmet != null && library != null)
             {
                 int index = helmet.Info.Image;
-
                 library.Draw(index, DisplayArea.X + x, DisplayArea.Y + y, Color.White, true, 1F, ImageType.Image);
                 library.Draw(index, DisplayArea.X + x, DisplayArea.Y + y, helmet.Colour, true, 1F, ImageType.Overlay);
             }
@@ -2608,6 +2703,23 @@ namespace Client.Scenes.Views
             y = (cell.Size.Height - s.Height) / 2 + cell.DisplayArea.Y;
 
             InterfaceLibrary.Draw(index, x, y, Color.White, false, 0.2F, ImageType.Image);
+        }
+
+        public void DrawAfter(DXItemCell cell)
+        {
+            if (cell.Item == null) return;
+
+            var image = ItemEffectDecider.GetItemEffectImageOrNull(cell.Item.Info.ItemType, cell.Item.Info.Shape, out int x, out int y);
+
+            if (image != null)
+            {
+                bool oldBlend = DXManager.Blending;
+                float oldRate = DXManager.BlendRate;
+
+                DXManager.SetBlend(true, 0.8F);
+                PresentTexture(image.Image, CharacterTab, new Rectangle(cell.DisplayArea.X + image.OffSetX + x, cell.DisplayArea.Y + image.OffSetY + y, image.Width, image.Height), ForeColour, this);
+                DXManager.SetBlend(oldBlend, oldRate);
+            }
         }
 
         public void UpdateStats()
@@ -2710,6 +2822,9 @@ namespace Client.Scenes.Views
             GuildNameLabel.Text = p.GuildName;
             GuildRankLabel.Text = p.GuildRank;
 
+            _inspectGuildFlag = p.GuildFlag;
+            _inspectGuildColour = p.GuildColour;
+
             //_inspectStats.Clear();
             //_inspectStats.Add(p.Stats);
 
@@ -2762,7 +2877,7 @@ namespace Client.Scenes.Views
 
             var nextLevel = GetNextDisciplineLevel();
 
-            DisciplineButton.Enabled = nextLevel != null;
+            DisciplineButton.Enabled = nextLevel != null && nextLevel.RequiredLevel <= GameScene.Game.User.Level;
 
             var userDiscipline = GameScene.Game.User.Discipline;
 
@@ -3216,7 +3331,7 @@ namespace Client.Scenes.Views
             KeyLabel = new DXLabel
             {
                 Parent = Image,
-                Font = new Font(Config.FontName, CEnvir.FontSize(10F), FontStyle.Bold),
+                Font = new System.Drawing.Font(Config.FontName, CEnvir.FontSize(10F), FontStyle.Bold),
                 IsControl = false,
                 ForeColour = Color.Aquamarine,
                 AutoSize = false,

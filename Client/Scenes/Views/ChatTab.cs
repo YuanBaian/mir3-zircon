@@ -358,6 +358,8 @@ namespace Client.Scenes.Views
                 case MessageType.Guild:
                     if (!Panel.GuildCheckBox.Checked) return;
                     break;
+                case MessageType.Debug:
+                    break;
             }
 
             DXLabel label = new DXLabel
@@ -538,6 +540,10 @@ namespace Client.Scenes.Views
                     label.BackColour = GetBackColour(Config.GuildTextBackColour);
                     label.ForeColour = Config.GuildTextForeColour;
                     break;
+                case MessageType.Debug:
+                    label.BackColour = Color.SkyBlue;
+                    label.ForeColour = Color.White;
+                    break;
             }
         }
 
@@ -609,7 +615,10 @@ namespace Client.Scenes.Views
             Regex regex = new Regex("[ ]{2,}", options);
             message = regex.Replace(message, " ");
             label.Text = regex.Replace(label.Text, " ");
-            label.AutoSize = true;
+            //label.AutoSize = true;
+
+            Size size = DXLabel.GetHeight(label, TextPanel.Size.Width);
+            label.Size = new Size(size.Width, size.Height);
 
             MatchCollection matches = Globals.LinkedItemRegex.Matches(message);
             List<CharacterRange> ranges = new List<CharacterRange>();

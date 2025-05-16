@@ -27,7 +27,14 @@ namespace Server.Models.Magics
         public override void RefreshToggle()
         {
             if (Player.Character.CanFlameSplash)
-                Player.Enqueue(new S.MagicToggle { Magic = MagicType.FlameSplash, CanUse = true });
+            {
+                var canUse = true;
+
+                if (!CanUseMagic())
+                    canUse = false;
+
+                Player.Enqueue(new S.MagicToggle { Magic = MagicType.FlameSplash, CanUse = canUse });
+            }
         }
 
         public override void Toggle(bool canUse)
@@ -40,7 +47,7 @@ namespace Server.Models.Magics
         {
             var response = new AttackCast();
 
-            if (attackType != Type)
+            if (attackType != Type || !Player.Character.CanFlameSplash)
                 return response;
 
             int cost = Magic.Cost;
@@ -55,7 +62,7 @@ namespace Server.Models.Magics
 
             if (cost <= Player.CurrentMP)
             {
-                Player.FlameSplashLifeSteal = 0;
+                FlameSplashLifeSteal = 0;
                 Player.ChangeMP(-cost);
 
                 response.Cast = true;
@@ -108,7 +115,7 @@ namespace Server.Models.Magics
 
         public override decimal LifeSteal(bool primary, decimal lifestealAmount)
         {
-            lifestealAmount = Math.Min(lifestealAmount, 2000 - FlameSplashLifeSteal);
+            lifestealAmount = Math.Min(lifestealAmount, 750 - FlameSplashLifeSteal);
             FlameSplashLifeSteal += lifestealAmount;
 
             return lifestealAmount;

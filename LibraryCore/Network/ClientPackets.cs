@@ -121,6 +121,14 @@ namespace Library.Network.ClientPackets
         public MirAction Action { get; set; }
         public MagicType AttackMagic { get; set; }
     }
+
+    public sealed class RangeAttack : Packet
+    {
+        public MirDirection Direction { get; set; }
+        public uint Target { get; set; }
+        public int DelayedTime { get; set; }
+
+    }
     public sealed class Mining : Packet
     {
         public MirDirection Direction { get; set; }
@@ -549,6 +557,21 @@ namespace Library.Network.ClientPackets
         public int Flag { get; set; }
     }
 
+    public sealed class GuildToggleCastleGates : Packet
+    {
+
+    }
+
+    public sealed class GuildRepairCastleGates : Packet
+    {
+
+    }
+
+    public sealed class GuildRepairCastleGuards : Packet
+    {
+
+    }
+
     public sealed class QuestAccept : Packet
     {
         public int Index { get; set; }
@@ -564,6 +587,10 @@ namespace Library.Network.ClientPackets
         public int Index { get; set; }
 
         public bool Track { get; set; }
+    }
+    public sealed class QuestAbandon : Packet
+    {
+        public int Index { get; set; }
     }
 
     public sealed class CompanionUnlock : Packet

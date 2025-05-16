@@ -1,4 +1,11 @@
-﻿using System;
+﻿using Client.Controls;
+using Client.Models;
+using Client.Scenes;
+using Client.Scenes.Views;
+using Library;
+using Library.Network;
+using Library.SystemModels;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -6,16 +13,9 @@ using System.Linq;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Windows.Forms;
-using Client.Controls;
-using Client.Models;
-using Client.Scenes;
-using Client.Scenes.Views;
-using Library.Network;
-using Library;
-using Library.SystemModels;
+using C = Library.Network.ClientPackets;
 using G = Library.Network.GeneralPackets;
 using S = Library.Network.ServerPackets;
-using C = Library.Network.ClientPackets;
 
 namespace Client.Envir
 {
@@ -110,6 +110,9 @@ namespace Client.Envir
                 case DisconnectReason.Banned:
                     DXMessageBox.Show("Disconnected from server\nReason: You have been banned.", "Disconnected", DialogAction.ReturnToLogin);
                     break;
+                case DisconnectReason.Kicked:
+                    DXMessageBox.Show("Disconnected from server\nReason: You have been kicked.", "Disconnected", DialogAction.ReturnToLogin);
+                    break;
                 case DisconnectReason.Crashed:
                     DXMessageBox.Show("Disconnected from server\nReason: Server Crashed.", "Disconnected", DialogAction.ReturnToLogin);
                     break;
@@ -132,7 +135,7 @@ namespace Client.Envir
             byte[] clientHash;
             using (MD5 md5 = MD5.Create())
             {
-                using (FileStream stream = File.OpenRead(Application.ExecutablePath))
+                using (FileStream stream = File.OpenRead(Path.ChangeExtension(Application.ExecutablePath, ".dll")))
                     clientHash = md5.ComputeHash(stream);
             }
 
@@ -893,7 +896,18 @@ namespace Client.Envir
 
                 player.Light = p.Light;
                 if (player == MapObject.User)
+                {
                     player.Light = Math.Max(p.Light, 3);
+
+                    if (p.Light == 0)
+                    {
+                        player.LightColour = Globals.PlayerLightColour;
+                    }
+                    else 
+                    {
+                        player.LightColour = Globals.NoneColour;
+                    }
+                }
 
                 player.UpdateLibraries();
                 return;
@@ -1542,6 +1556,15 @@ namespace Client.Envir
                                 DXSoundManager.Play(SoundIndex.ChainofFireExplode);
                         };
                         break;
+                    case Effect.MirrorImage:
+                        new MirEffect(1280, 10, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx2, 30, 60, Globals.NoneColour)
+                        {
+                            Target = ob,
+                            Blend = true,
+                        };
+
+                        DXSoundManager.Play(SoundIndex.SummonSkeletonEnd);
+                        break;
                     default:
                         throw new ArgumentOutOfRangeException();
                 }
@@ -1570,15 +1593,6 @@ namespace Client.Envir
                     };
 
                     DXSoundManager.Play(SoundIndex.SummonShinsuEnd);
-                    break;
-                case Effect.MirrorImage:
-                    new MirEffect(1280, 10, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx2, 30, 60, Globals.NoneColour)
-                    {
-                        MapTarget = p.Location,
-                        Blend = true,
-                    };
-
-                    DXSoundManager.Play(SoundIndex.SummonSkeletonEnd);
                     break;
                 case Effect.CursedDoll:
                     new MirEffect(700, 13, TimeSpan.FromMilliseconds(100), LibraryFile.MagicEx3, 30, 60, Globals.NoneColour)
@@ -1704,6 +1718,8 @@ namespace Client.Envir
 
             if (GameScene.Game.CharacterBox.DisciplineMagics.ContainsKey(p.Magic.Info))
                 GameScene.Game.CharacterBox.DisciplineMagics[p.Magic.Info].Refresh();
+
+            GameScene.Game.MagicBox?.CreateTabs();
         }
 
         public void Process(S.MagicLeveled p)
@@ -1817,17 +1833,18 @@ namespace Client.Envir
 
             GameScene.Game.ReceiveChat(CEnvir.Language.LevelIncreased, MessageType.System);
         }
+
         public void Process(S.GainedExperience p)
         {
             MapObject.User.Experience += p.Amount;
-
-            ClientUserItem weapon = GameScene.Game.Equipment[(int)EquipmentSlot.Weapon];
 
             if (p.Amount < 0)
             {
                 GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.LostExperience, p.Amount), MessageType.Combat);
                 return;
             }
+
+            ClientUserItem weapon = GameScene.Game.Equipment[(int)EquipmentSlot.Weapon];
 
             if (weapon != null && weapon.Info.ItemEffect != ItemEffect.PickAxe && (weapon.Flags & UserItemFlags.Refinable) != UserItemFlags.Refinable && (weapon.Flags & UserItemFlags.NonRefinable) != UserItemFlags.NonRefinable && weapon.Level < Globals.WeaponExperienceList.Count)
             {
@@ -1844,7 +1861,10 @@ namespace Client.Envir
                 else
                     GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.GainedExperienceAndWeaponExperience, p.Amount, p.Amount / 10), MessageType.Combat);
             }
+            else
+                GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.GainedExperience, p.Amount), MessageType.Combat);
         }
+
         public void Process(S.ObjectLeveled p)
         {
             foreach (MapObject ob in GameScene.Game.MapControl.Objects)
@@ -2459,7 +2479,18 @@ namespace Client.Envir
 
             foreach (var item in p.Items)
             {
-                grid[item.Slot].Item = item;
+                switch (p.Grid)
+                {
+                    case GridType.Inventory:
+                        grid[item.Slot].Item = item;
+                        break;
+                    case GridType.Storage:
+                        grid[item.Slot].Item = item;
+                        break;
+                    case GridType.PartsStorage:
+                        grid[item.Slot - Globals.PartsStorageOffset].Item = item;
+                        break;
+                }
             }
         }
 
@@ -3195,7 +3226,6 @@ namespace Client.Envir
         {
             GameScene.Game.GroupBox.Members.Add(new ClientPlayerInfo { ObjectID = p.ObjectID, Name = p.Name });
 
-
             GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.GroupJoin, p.Name), MessageType.Group);
 
             GameScene.Game.GroupBox.UpdateMembers();
@@ -3205,7 +3235,6 @@ namespace Client.Envir
 
             GameScene.Game.BigMapBox.Update(data);
             GameScene.Game.MiniMapBox.Update(data);
-
         }
         public void Process(S.GroupRemove p)
         {
@@ -3286,16 +3315,14 @@ namespace Client.Envir
         }
         public void Process(S.BuffPaused p)
         {
-
-
             MapObject.User.Buffs.First(x => x.Index == p.Index).Pause = p.Paused;
 
             GameScene.Game.BuffBox.BuffsChanged();
         }
 
-        public void Process(S.SafeZoneChanged P)
+        public void Process(S.SafeZoneChanged p)
         {
-            MapObject.User.InSafeZone = P.InSafeZone;
+            MapObject.User.InSafeZone = p.InSafeZone;
         }
 
         public void Process(S.CombatTime p)
@@ -3949,6 +3976,8 @@ namespace Client.Envir
                 ob.NameChanged();
 
             GameScene.Game.GuildBox.CastlePanels[castle].Update();
+
+            GameScene.Game.GuildBox.RefreshCastleControls();
         }
         public void Process(S.GuildConquestDate p)
         {
@@ -3963,7 +3992,6 @@ namespace Client.Envir
             GameScene.Game.ReincarnationPillTime = CEnvir.Now + p.ReincarnationPillTime;
         }
 
-
         public void Process(S.QuestChanged p)
         {
             foreach (ClientUserQuest quest in GameScene.Game.QuestLog)
@@ -3976,6 +4004,11 @@ namespace Client.Envir
                 quest.SelectedReward = p.Quest.SelectedReward;
                 quest.Tasks.Clear();
                 quest.Tasks.AddRange(p.Quest.Tasks);
+
+                if (quest.Completed)
+                {
+                    DXSoundManager.Play(SoundIndex.QuestComplete);
+                }
             
                 GameScene.Game.QuestChanged(p.Quest);
                 return;
@@ -3983,6 +4016,8 @@ namespace Client.Envir
 
             GameScene.Game.QuestLog.Add(p.Quest);
             GameScene.Game.QuestChanged(p.Quest);
+
+            DXSoundManager.Play(SoundIndex.QuestTake);
         }
 
         public void Process(S.QuestCancelled p)

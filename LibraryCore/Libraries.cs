@@ -27,9 +27,13 @@ namespace Library
             [LibraryFile.NPC] = @"Data\NPC.Zl",
             [LibraryFile.GameInter2] = @"Data\GameInter2.Zl",
             [LibraryFile.MiniMap] = @"Data\MiniMap.Zl",
-            [LibraryFile.Fmmap] = @"Data\Fmmap.Zl",
+            [LibraryFile.MiniMap2] = @"Data\MiniMap2.Zl",
 
             [LibraryFile.CastleFlag] = @"Data\Flag.Zl",
+
+            [LibraryFile.MiniMapIcon] = @"Data\MiniMapIcon.Zl",
+
+            [LibraryFile.Background] = @"Data\Background.Zl",
 
             [LibraryFile.MagicIcon] = @"Data\MIcon.Zl",
             [LibraryFile.CBIcon] = @"Data\CBIcons.Zl",
@@ -88,7 +92,6 @@ namespace Library
             [LibraryFile.WM_CostumeEx1] = @"Data\WM-CostumeEx1.Zl",
 
             [LibraryFile.Horse] = @"Data\Horse.Zl",
-            [LibraryFile.HorseS] = @"Data\HorseS.Zl",
             [LibraryFile.HorseIron] = @"Data\Horse_Iron.Zl",
             [LibraryFile.HorseSilver] = @"Data\Horse_Silver.Zl",
             [LibraryFile.HorseGold] = @"Data\Horse_Golden.Zl",
@@ -97,6 +100,8 @@ namespace Library
             [LibraryFile.HorseDarkEffect] = @"Data\Horse_DarkEffect.Zl",
             [LibraryFile.HorseRoyal] = @"Data\Horse_Royal.Zl",
             [LibraryFile.HorseRoyalEffect] = @"Data\Horse_RoyalEffect.Zl",
+            [LibraryFile.HorseBlueDragon] = @"Data\Horse_BlueDragon.Zl",
+            [LibraryFile.HorseBlueDragonEffect] = @"Data\Horse_BlueDragonEffect.Zl",
 
             [LibraryFile.M_Shield1] = @"Data\M-Shield1.Zl",
             [LibraryFile.M_Shield2] = @"Data\M-Shield2.Zl",
@@ -460,12 +465,14 @@ namespace Library
         Ground,
         NPC,
         MiniMap,
-        Fmmap,
+        MiniMap2,
         MagicIcon,
         CBIcon,
         QuestIcon,
         MiniGames,
         CastleFlag,
+        MiniMapIcon,
+        Background,
 
         NPCImage,
         MonImage,
@@ -526,6 +533,8 @@ namespace Library
         HorseDarkEffect,
         HorseRoyal,
         HorseRoyalEffect,
+        HorseBlueDragon,
+        HorseBlueDragonEffect,
 
         M_Weapon1,
         M_Weapon2,

@@ -48,9 +48,10 @@ namespace Library
                             HolyColour = Color.DarkKhaki,
                             DarkColour = Color.SaddleBrown,
                             PhantomColour = Color.Purple,
-
                             BrownNameColour = Color.Brown,
-                            RedNameColour = Color.Red;
+                            RedNameColour = Color.Red,
+
+                            PlayerLightColour = Color.FromArgb(120, 255, 255, 255);
 
         public const string ClientName = "Legend of Mir 3";
 
@@ -102,7 +103,9 @@ namespace Library
 
             CommonCraftWeaponPercentCost = 30000000,
             SuperiorCraftWeaponPercentCost = 60000000,
-            EliteCraftWeaponPercentCost = 80000000;
+            EliteCraftWeaponPercentCost = 80000000,
+
+            ShurikenLibraryWeaponShape = 33;
 
         public static decimal MarketPlaceTax = 0.07M;  //2.5x Item cost
 
@@ -302,6 +305,11 @@ namespace Library
             [RefineQuality.Careful] = TimeSpan.FromHours(6),
             [RefineQuality.Precise] = TimeSpan.FromDays(1),
         };
+
+        public static string PluginPath(string assemblyName)
+        {
+            return "Plugins" + "\\" + assemblyName + "\\";
+        }
     }
 
     public sealed class SelectInfo
@@ -407,7 +415,9 @@ namespace Library
         public string FiltersRarity { get; set; }
         public string FiltersItemType { get; set; }
 
+        //Server settings
         public bool StruckEnabled { get; set; }
+        public bool HermitEnabled { get; set; }
 
         [CompleteObject]
         public void OnComplete()
@@ -773,6 +783,7 @@ namespace Library
 
         public int Level { get; set; }
         public long Experience { get; set; }
+        public bool ItemRequired { get; set; }
 
         public TimeSpan Cooldown { get; set; }
 

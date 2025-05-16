@@ -9,7 +9,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.TaskBand;
 using C = Library.Network.ClientPackets;
 
 namespace Client.Scenes.Views
@@ -26,6 +25,8 @@ namespace Client.Scenes.Views
         public DXButton SellButton;
 
         public List<DXItemCell> SelectedItems = new();
+
+        public List<ItemType> SellableItemTypes = new();
 
         #region PrimaryCurrency
 
@@ -328,8 +329,8 @@ namespace Client.Scenes.Views
                 Index = 354,
                 Parent = this,
                 Location = new Point(218, 384),
-                Hint = "Sell",
-                Enabled = false,
+                Hint = "Sell All",
+                Enabled = true,
                 Visible = false
             };
             SellButton.MouseClick += SellButton_MouseClick;
@@ -338,7 +339,7 @@ namespace Client.Scenes.Views
             {
                 Parent = this,
                 Location = new Point(8, 380),
-                Hint = CEnvir.Language.InventoryDialogWalletLabelHint,
+                Hint = string.Format(CEnvir.Language.InventoryDialogWalletLabelHint, CEnvir.GetKeyBindLabel(KeyBindAction.CurrencyWindow)),
                 Size = new Size(45, 40),
                 Sound = SoundIndex.GoldPickUp
             };
@@ -350,7 +351,6 @@ namespace Client.Scenes.Views
             if (GameScene.Game.Observer) return;
 
             C.ItemSort packet = new C.ItemSort { Grid = GridType.Inventory };
-
             CEnvir.Enqueue(packet);
         }
 
@@ -384,6 +384,13 @@ namespace Client.Scenes.Views
                 {
                     if (cell.Item != null && (cell.Item.Flags & UserItemFlags.Locked) != UserItemFlags.Locked)
                     {
+                        if (!SellableItemTypes.Contains(cell.Item.Info.ItemType))
+                        {
+                            GameScene.Game.ReceiveChat(string.Format(CEnvir.Language.UnableToSellHere, cell.Item.Info.ItemName), MessageType.System);
+                            cell.Selected = false;
+                            return;
+                        }
+
                         SelectedItems.Add(cell);
                     }
                 }
@@ -400,7 +407,8 @@ namespace Client.Scenes.Views
 
                 SecondaryCurrencyLabel.Text = sum.ToString("#,##0");
 
-                SellButton.Enabled = count > 0;
+                SellButton.Enabled = true;
+                SellButton.Hint = count == 1 ? "Sell" : "Sell All";
             }
         }
 
@@ -414,14 +422,33 @@ namespace Client.Scenes.Views
 
             List<CellLinkInfo> links = new();
 
-            foreach (DXItemCell itemCell in SelectedItems)
+            if (SelectedItems.Count > 0)
             {
-                if ((itemCell.Item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) continue;
+                foreach (DXItemCell itemCell in SelectedItems)
+                {
+                    if ((itemCell.Item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) continue;
 
-                links.Add(new CellLinkInfo { Count = itemCell.Item.Count, GridType = GridType.Inventory, Slot = itemCell.Slot });
+                    links.Add(new CellLinkInfo { Count = itemCell.Item.Count, GridType = GridType.Inventory, Slot = itemCell.Slot });
+                }
+            }
+            else
+            {
+                //Sell all
+                foreach(DXItemCell itemCell in Grid.Grid)
+                {
+                    if (itemCell.Item == null) continue;
+                    if ((itemCell.Item.Flags & UserItemFlags.Locked) == UserItemFlags.Locked) continue;
+                    
+                    if (SellableItemTypes.Count > 0 && !SellableItemTypes.Contains(itemCell.Item.Info.ItemType)) continue;
+
+                    links.Add(new CellLinkInfo { Count = itemCell.Item.Count, GridType = GridType.Inventory, Slot = itemCell.Slot });
+                }
             }
 
-            CEnvir.Enqueue(new C.NPCSell { Links = links });
+            if (links.Count > 0)
+            {
+                CEnvir.Enqueue(new C.NPCSell { Links = links });
+            }
         }
 
         private void PrimaryCurrencyLabel_MouseClick(object sender, MouseEventArgs e)
@@ -502,9 +529,11 @@ namespace Client.Scenes.Views
             SecondaryCurrencyLabel.Text = userCurrency.Amount.ToString("#,##0");
         }
 
-        public void SellMode(CurrencyInfo currency)
+        public void SellMode(CurrencyInfo currency, List<ItemType> sellableItemTypes)
         {
             SetPrimaryCurrency(currency);
+
+            SellableItemTypes = sellableItemTypes;
 
             InvMode = InventoryMode.Sell;
         }
@@ -512,6 +541,8 @@ namespace Client.Scenes.Views
         public void NormalMode()
         {
             SetPrimaryCurrency(null);
+
+            SellableItemTypes.Clear();
 
             InvMode = InventoryMode.Normal;
         }

@@ -145,6 +145,7 @@ namespace Client.Scenes
         public MapControl MapControl;
         public MainPanel MainPanel;
 
+        public MenuDialog MenuBox;
         public DXConfigWindow ConfigBox;
         public CaptionDialog CaptionBox;
         public InventoryDialog InventoryBox;
@@ -175,6 +176,7 @@ namespace Client.Scenes
         public BigMapDialog BigMapBox;
         public MagicDialog MagicBox;
         public GroupDialog GroupBox;
+        public GroupHealthDialog GroupHealthBox;
         public BuffDialog BuffBox;
         public StorageDialog StorageBox;
         public AutoPotionDialog AutoPotionBox;
@@ -216,7 +218,7 @@ namespace Client.Scenes
         public Dictionary<CastleInfo, string> CastleOwners = new Dictionary<CastleInfo, string>();
 
         public bool MoveFrame { get; set; }
-        private DateTime MoveTime, OutputTime, ItemRefreshTime;
+        public DateTime MoveTime, OutputTime, ItemRefreshTime;
 
         public bool CanRun;
 
@@ -319,6 +321,19 @@ namespace Client.Scenes
 
         public bool StruckEnabled;
 
+        public bool HermitEnabled
+        {
+            get => _HermitEnabled;
+            set
+            {
+                if (_HermitEnabled == value) return;
+
+                _HermitEnabled = value;
+                CharacterBox.OnHermitChanged(_HermitEnabled);
+            }
+        }
+        private bool _HermitEnabled;
+
         public float DayTime
         {
             get => _DayTime;
@@ -352,6 +367,8 @@ namespace Client.Scenes
             QuestBox?.LoadSettings();
             FishingBox?.LoadSettings();
             GroupBox?.LoadSettings();
+            GuildBox?.LoadSettings();
+            MenuBox?.LoadSettings();
 
             LoadChatTabs();
         }
@@ -383,15 +400,19 @@ namespace Client.Scenes
 
             MainPanel = new MainPanel { Parent = this };
 
+            MenuBox = new MenuDialog
+            {
+                Parent = this,
+                Visible = false
+            };
+
             ConfigBox = new DXConfigWindow
             {
                 Parent = this,
                 Visible = false,
                 NetworkTab = { Enabled = false, TabButton = { Visible = false } },
                 ColourTab = { TabButton = { Visible = true } },
-                ExitButton = { Visible = true },
             };
-            ConfigBox.ExitButton.MouseClick += (o, e) => ExitBox.Visible = true;
 
             ExitBox = new ExitDialog
             {
@@ -426,6 +447,7 @@ namespace Client.Scenes
             ChatTextBox = new ChatTextBox
             {
                 Parent = this,
+                Visible = false
             };
             ChatOptionsBox = new ChatOptionsDialog
             {
@@ -491,6 +513,11 @@ namespace Client.Scenes
             {
                 Parent = this,
                 Visible = false,
+            };
+            GroupHealthBox = new GroupHealthDialog()
+            {
+                Parent = this,
+                Visible = true,
             };
 
             BigMapBox = new BigMapDialog
@@ -690,12 +717,16 @@ namespace Client.Scenes
             QuestBox.LoadSettings();
             FishingBox.LoadSettings();
             GroupBox.LoadSettings();
+            GuildBox.LoadSettings();
+            MenuBox.LoadSettings();
         }
 
         #region Methods
         private void SetDefaultLocations()
         {
             if (ConfigBox == null) return;
+
+            MenuBox.Location = new Point(Size.Width - MenuBox.Size.Width, Size.Height - MenuBox.Size.Height - MainPanel.Size.Height);
 
             ConfigBox.Location = new Point((Size.Width - ConfigBox.Size.Width)/2, (Size.Height - ConfigBox.Size.Height)/2);
 
@@ -903,8 +934,10 @@ namespace Client.Scenes
                 MapControl.Animation++;
                 MoveFrame = true;
             }
-            else
+            else if (!Config.SmoothMove)
+            {
                 MoveFrame = false;
+            }
 
             if (MouseControl == MapControl)
                 MapControl.CheckCursor();
@@ -1019,6 +1052,18 @@ namespace Client.Scenes
             }
         }
 
+        public override void OnKeyPress(KeyPressEventArgs e)
+        {
+            base.OnKeyPress(e);
+
+            switch ((Keys)e.KeyChar)
+            {
+                case Keys.Enter:
+                    ChatTextBox.ToggleVisibility(e, false);
+                    break;
+            }
+        }
+
         public override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
@@ -1037,6 +1082,9 @@ namespace Client.Scenes
             {
                 switch (action)
                 {
+                    case KeyBindAction.MenuWindow:
+                        MenuBox.Visible = !MenuBox.Visible;
+                        break;
                     case KeyBindAction.ConfigWindow:
                         ConfigBox.Visible = !ConfigBox.Visible;
                         break;
@@ -1136,20 +1184,7 @@ namespace Client.Scenes
                         MiniMapBox.Visible = false;
                         break;
                     case KeyBindAction.MapBigWindow:
-                        if (!BigMapBox.Visible)
-                        {
-                            BigMapBox.Opacity = 1F;
-                            BigMapBox.Visible = true;
-                            return;
-                        }
-
-                        if (BigMapBox.Opacity == 1F)
-                        {
-                            BigMapBox.Opacity = 0.5F;
-                            return;
-                        }
-
-                        BigMapBox.Visible = false;
+                        BigMapBox.ToggleOpen(!BigMapBox.Visible);
                         break;
                     case KeyBindAction.MailBoxWindow:
                         if (Observer) continue;
@@ -2818,7 +2853,6 @@ namespace Client.Scenes
 
             foreach (KeyValuePair<MagicInfo, ClientUserMagic> pair in User.Magics)
             {
-
                 switch (MagicBarBox.SpellSet)
                 {
                     case 1:
@@ -2842,7 +2876,18 @@ namespace Client.Scenes
                 if (magic != null) break;
             }
 
-            if (magic == null || User.Level < magic.Info.NeedLevel1) return;
+            if (magic == null) return;
+
+            if (magic.ItemRequired)
+            {
+                var magicItem = Equipment.FirstOrDefault(x => x != null && x.Info.ItemEffect == ItemEffect.MagicRing && x.Info.Shape == magic.Info.Index);
+
+                if (magicItem == null) return;
+            }
+            else
+            {
+                if (User.Level < magic.Info.NeedLevel1) return;
+            }
 
             switch (magic.Info.Magic)
             {
@@ -3076,6 +3121,9 @@ namespace Client.Scenes
                 case MagicType.SearingLight:
 
                 case MagicType.Hemorrhage:
+                    if (CanAttackTarget(MagicObject))
+                        target = MagicObject;
+
                     if (CanAttackTarget(MouseObject))
                     {
                         target = MouseObject;
@@ -3297,7 +3345,7 @@ namespace Client.Scenes
 
         private bool CanAttackTarget(MapObject ob)
         {
-            if (ob == null || ob.Dead) return false;
+            if (ob == null || ob.Dead || !ob.Visible) return false;
 
             switch (ob.Race)
             {
@@ -3736,6 +3784,15 @@ namespace Client.Scenes
 
             User.Light = Math.Max(3, User.Stats[Stat.Light]);
 
+            if (User.Stats[Stat.Light] == 0)
+            {
+                User.LightColour = Globals.PlayerLightColour;
+            }
+            else
+            {
+                User.LightColour = Globals.NoneColour;
+            }
+
             MainPanel.ACLabel.Text = User.Stats.GetFormat(Stat.MaxAC);
             MainPanel.MACLabel.Text = User.Stats.GetFormat(Stat.MaxMR);
 
@@ -3758,9 +3815,7 @@ namespace Client.Scenes
         {
             if (User == null) return;
 
-            MainPanel.ExperienceLabel.Text = User.MaxExperience > 0 ? $"{User.Experience/User.MaxExperience: #,##0.00%}" : $"{User.Experience: #,##0#}";
-
-            MainPanel.ExperienceBar.Hint = $"{User.Experience:#,##0.#}/{User.MaxExperience: #,##0.#}";
+            MainPanel.ExperienceBar.Hint = User.MaxExperience > 0 ? $"(Experience) {User.Experience / User.MaxExperience:#,##0.00%}" : "(Experience) Max";
         }
         public void HealthChanged()
         {
@@ -3826,10 +3881,10 @@ namespace Client.Scenes
                 cell.UpdateColours();
             }
 
-            foreach (CurrencyCell cell in CurrencyBox.Cells)
-            {
-                cell.UpdateAmount();
-            }
+            //foreach (CurrencyCell cell in CurrencyBox.Cells)
+            //{
+            //    cell.UpdateAmount();
+            //}
         }
         public void SafeZoneChanged()
         {
@@ -3907,7 +3962,6 @@ namespace Client.Scenes
                         {
                             case MirClass.Warrior:
                                 if ((requirement.Class & RequiredClass.Warrior) != RequiredClass.Warrior) return false;
-
                                 break;
                             case MirClass.Wizard:
                                 if ((requirement.Class & RequiredClass.Wizard) != RequiredClass.Wizard) return false;
@@ -4016,7 +4070,7 @@ namespace Client.Scenes
                     builder.AppendFormat("Collect {0} {1} from ", task.Amount, task.ItemParameter?.ItemName);  
                     break;
                 case QuestTaskType.Region:
-                    builder.AppendFormat("Goto {0} in {1}", task.RegionParameter?.Description, task.RegionParameter?.Map.Description);
+                    builder.AppendFormat("Goto {0} in {1}", task.RegionParameter?.Description, task.RegionParameter?.Map.PlayerDescription);
                     break;
             }
 
@@ -4041,7 +4095,7 @@ namespace Client.Scenes
                     builder.Append(monster.Monster.MonsterName);
 
                     if (monster.Map != null)
-                        builder.AppendFormat(" in {0}", monster.Map.Description);
+                        builder.AppendFormat(" in {0}", monster.Map.PlayerDescription);
                 }
             }
             else
@@ -4124,14 +4178,15 @@ namespace Client.Scenes
             }
 
         }
-        public DXControl GetNPCControl(NPCInfo NPC)
+        public DXControl GetNPCControl(NPCInfo npc)
         {
             int icon = 0;
             Color colour = Color.White;
+            string iconString = "";
 
-            if (NPC.CurrentQuest != null)
+            if (npc.CurrentQuest != null)
             {
-                switch (NPC.CurrentQuest.Type)
+                switch (npc.CurrentQuest.Type)
                 {
                     case QuestType.General:
                         icon = 16;
@@ -4159,32 +4214,63 @@ namespace Client.Scenes
                         break;
                 }
 
-                switch (NPC.CurrentQuest.Icon)
+                switch (npc.CurrentQuest.Icon)
                 {
                     case QuestIcon.New:
                         icon += 0;
+                        iconString = "!";
                         break;
                     case QuestIcon.Incomplete:
                         icon = 2;
                         colour = Color.White;
+                        iconString = "?";
                         break;
                     case QuestIcon.Complete:
                         icon += 2;
+                        iconString = "?";
                         break;
                 }
             }
 
-            if (icon > 0)
+            if (!string.IsNullOrEmpty(iconString))
+            {
+                DXLabel label = new DXLabel
+                {
+                    Text = iconString,
+                    ForeColour = colour,
+                    Hint = npc.NPCName,
+                    Tag = npc.CurrentQuest,
+                    Font = new Font(Config.FontName, CEnvir.FontSize(10F), FontStyle.Bold)
+                };
+
+                return label;
+            }
+            else if (icon > 0)
             {
                 DXImageControl image = new DXImageControl
                 {
                     LibraryFile = LibraryFile.QuestIcon,
                     Index = icon,
                     ForeColour = colour,
-                    Hint = NPC.NPCName,
-                    Tag = NPC.CurrentQuest,
+                    Hint = npc.NPCName,
+                    Tag = npc.CurrentQuest,
                 };
                 image.OpacityChanged += (o, e) => image.ImageOpacity = image.Opacity;
+
+                return image;
+            }
+            else if (npc.MapIcon != MapIcon.None)
+            {
+                DXImageControl image = new DXImageControl
+                {
+                    LibraryFile = LibraryFile.MiniMapIcon,
+                    Opacity = Opacity,
+                    Hint = npc.NPCName,
+                    ImageOpacity = Opacity,
+                };
+                image.OpacityChanged += (o, e) => image.ImageOpacity = image.Opacity;
+
+                GameScene.Game.UpdateMapIcon(image, npc.MapIcon);
 
                 return image;
             }
@@ -4193,10 +4279,41 @@ namespace Client.Scenes
             {
                 Size = new Size(3, 3),
                 DrawTexture = true,
-                Hint = NPC.NPCName,
-                BackColour = Color.Lime,
-                Tag = NPC.CurrentQuest,
+                Hint = npc.NPCName,
+                BackColour = Color.Lime
             };
+        }
+
+        public void UpdateMapIcon(DXImageControl control, MapIcon icon)
+        {
+            switch (icon)
+            {
+                case MapIcon.Cave:
+                    control.Index = 1;
+                    control.ForeColour = Color.Red;
+                    break;
+                case MapIcon.Exit:
+                    control.Index = 1;
+                    control.ForeColour = Color.Green;
+                    break;
+                case MapIcon.Down:
+                    control.Index = 1;
+                    control.ForeColour = Color.MediumVioletRed;
+                    break;
+                case MapIcon.Up:
+                    control.Index = 1;
+                    control.ForeColour = Color.DeepSkyBlue;
+                    break;
+                case MapIcon.Province:
+                    control.Index = 7;
+                    break;
+                case MapIcon.Building:
+                    control.Index = 6;
+                    break;
+                default:
+                    control.Index = (int)icon;
+                    break;
+            }
         }
 
         public bool IsAlly(uint objectID)
@@ -4270,6 +4387,14 @@ namespace Client.Scenes
                         MainPanel.Dispose();
 
                     MainPanel = null;
+                }
+
+                if (MenuBox != null)
+                {
+                    if (!MenuBox.IsDisposed)
+                        MenuBox.Dispose();
+
+                    MenuBox = null;
                 }
 
                 if (ConfigBox != null)
@@ -4493,6 +4618,14 @@ namespace Client.Scenes
                         GroupBox.Dispose();
 
                     GroupBox = null;
+                }
+
+                if (GroupHealthBox != null)
+                {
+                    if (!GroupHealthBox.IsDisposed)
+                        GroupHealthBox.Dispose();
+
+                    GroupHealthBox = null;
                 }
 
                 if (BuffBox != null)

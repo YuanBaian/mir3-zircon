@@ -1,16 +1,20 @@
 ﻿using Library;
 using Library.Network;
+using Library.Network.ClientPackets;
 using Library.SystemModels;
 using Server.DBModels;
 using Server.Envir;
+using Server.Envir.Events.Triggers;
 using Server.Models.Magics;
 using Server.Models.Monsters;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.Tracing;
 using System.Drawing;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.PortableExecutable;
 using System.Text.RegularExpressions;
 using C = Library.Network.ClientPackets;
 using S = Library.Network.ServerPackets;
@@ -107,10 +111,10 @@ namespace Server.Models
             set { Character.Direction = value; }
         }
 
-        public DateTime ShoutTime, UseItemTime, TorchTime, CombatTime, PvPTime, SentCombatTime, AutoPotionTime, AutoPotionCheckTime, ItemTime, RevivalTime, TeleportTime, DailyQuestTime, FishingCastTime;
+        public DateTime ShoutExpiry, UseItemTime, TorchTime, CombatTime, PvPTime, SentCombatTime, AutoPotionTime, AutoPotionCheckTime, ItemTime, RevivalTime, TeleportTime, DailyQuestTime, FishingCastTime, MailTime, ExperienceTime;
         public bool PacketWaiting;
 
-        public bool GameMaster, Observer;
+        public bool GameMaster, Observer, Superman;
 
         public override bool Blocking => base.Blocking && !Observer;
 
@@ -165,9 +169,7 @@ namespace Server.Models
 
         public List<AutoPotionLink> AutoPotions = new List<AutoPotionLink>();
         public CellLinkInfo DelayItemUse;
-        public decimal MaxExperience;
-
-        public decimal SwiftBladeLifeSteal, FlameSplashLifeSteal, DestructiveSurgeLifeSteal;
+        public decimal MaxExperience, ExperienceAccumulated;
 
         public string FiltersClass;
         public string FiltersRarity;
@@ -227,9 +229,9 @@ namespace Server.Models
                 Observer = true;
             }
 
-            FiltersClass = Character.FiltersClass;
-            FiltersItemType = Character.FiltersItemType;
-            FiltersRarity = Character.FiltersRarity;
+            FiltersClass = Character.FiltersClass ?? "";
+            FiltersItemType = Character.FiltersItemType ?? "";
+            FiltersRarity = Character.FiltersRarity ?? "";
 
             AddDefaultCurrencies();
 
@@ -286,6 +288,8 @@ namespace Server.Models
             }
         }
 
+        #region Process
+
         public override void Process()
         {
             base.Process();
@@ -307,6 +311,8 @@ namespace Server.Models
             }
 
             ProcessRegen();
+
+            ProcessExperience();
 
             HashSet<MonsterObject> clearList = new HashSet<MonsterObject>();
 
@@ -367,6 +373,10 @@ namespace Server.Models
                 case ActionType.Attack:
                     PacketWaiting = false;
                     Attack((MirDirection)action.Data[0], (MagicType)action.Data[1]);
+                    return;
+                case ActionType.RangeAttack:
+                    PacketWaiting = false;
+                    RangeAttack((MirDirection)action.Data[0], (int)action.Data[1], (uint)action.Data[2]);
                     return;
                 case ActionType.DelayAttack:
                     Attack((MapObject)action.Data[0], (List<MagicType>)action.Data[1], (bool)action.Data[2], (int)action.Data[3]);
@@ -567,9 +577,7 @@ namespace Server.Models
 
                 if (item.ExpireTime > TimeSpan.Zero) continue;
 
-                Connection.ReceiveChat(string.Format(Connection.Language.Expired, item.Info.ItemName), MessageType.System);
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.Expired, item.Info.ItemName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.Expired, item.Info.ItemName), MessageType.System);
 
                 RemoveItem(item);
                 Equipment[i] = null;
@@ -596,9 +604,7 @@ namespace Server.Models
 
                 if (item.ExpireTime > TimeSpan.Zero) continue;
 
-                Connection.ReceiveChat(string.Format(Connection.Language.Expired, item.Info.ItemName), MessageType.System);
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.Expired, item.Info.ItemName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.Expired, item.Info.ItemName), MessageType.System);
 
                 RemoveItem(item);
                 Inventory[i] = null;
@@ -626,9 +632,7 @@ namespace Server.Models
 
                     if (item.ExpireTime > TimeSpan.Zero) continue;
 
-                    Connection.ReceiveChat(string.Format(Connection.Language.Expired, item.Info.ItemName), MessageType.System);
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.Expired, item.Info.ItemName), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.Expired, item.Info.ItemName), MessageType.System);
 
                     RemoveItem(item);
                     Companion.Inventory[i] = null;
@@ -653,9 +657,7 @@ namespace Server.Models
 
                     if (item.ExpireTime > TimeSpan.Zero) continue;
 
-                    Connection.ReceiveChat(string.Format(Connection.Language.Expired, item.Info.ItemName), MessageType.System);
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.Expired, item.Info.ItemName), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.Expired, item.Info.ItemName), MessageType.System);
 
                     RemoveItem(item);
                     Companion.Equipment[i] = null;
@@ -682,10 +684,10 @@ namespace Server.Models
 
             DailyQuestTime = SEnvir.Now.AddSeconds(20);
 
-            bool cancel = false;
-
             for (int i = Character.Quests.Count - 1; i >= 0; i--)
             {
+                bool cancel = false;
+
                 var quest = Character.Quests[i];
 
                 switch (quest.QuestInfo.QuestType)
@@ -729,6 +731,16 @@ namespace Server.Models
             }
         }
 
+        public void ProcessExperience(bool force = false)
+        {
+            if (ExperienceAccumulated > 0 && (ExperienceTime < SEnvir.Now || force))
+            {
+                Enqueue(new S.GainedExperience { Amount = ExperienceAccumulated });
+                ExperienceTime = SEnvir.Now.AddSeconds(1);
+                ExperienceAccumulated = 0;
+            }
+        }
+
         public override void ProcessNameColour()
         {
             NameColour = Color.White;
@@ -744,7 +756,9 @@ namespace Server.Models
             else if (Stats[Stat.PKPoint] >= 50)
                 NameColour = Color.Yellow;
         }
-        
+
+        #endregion
+
         private StartInformation GetStartInformation(bool observer = false)
         {
             List<ClientBeltLink> blinks = new List<ClientBeltLink>();
@@ -853,7 +867,8 @@ namespace Server.Models
                 FiltersRarity = Character.FiltersRarity,
                 FiltersItemType = Character.FiltersItemType,
 
-                StruckEnabled = Config.EnableStruck
+                StruckEnabled = Config.EnableStruck,
+                HermitEnabled = Config.EnableHermit
             };
         }
 
@@ -874,7 +889,17 @@ namespace Server.Models
                 {
                     return;
                 }
-                else if (Spawn(Character.BindPoint.BindRegion, null, 0))
+
+                if (Character.CurrentMap.ReconnectMap != null)
+                {
+                    var reconnectMap = SEnvir.GetMap(Character.CurrentMap.ReconnectMap);
+                    if (Spawn(reconnectMap, reconnectMap.GetRandomLocation()))
+                    {
+                        return;
+                    }
+                }
+
+                if (Spawn(Character.BindPoint.BindRegion, null, 0))
                 {
                     return;
                 }
@@ -922,6 +947,8 @@ namespace Server.Models
             BuffRemove(BuffType.Veteran);
             BuffRemove(BuffType.ElementalHurricane);
             BuffRemove(BuffType.SuperiorMagicShield);
+
+            SEnvir.EventLogs.RemoveAll(x => x.PlayerIndex == Character.Index);
 
             if (GroupMembers != null) GroupLeave();
 
@@ -974,14 +1001,14 @@ namespace Server.Models
             Connection.Player = this;
             Connection.Stage = GameStage.Game;
 
-            ShoutTime = SEnvir.Now.AddSeconds(10);
+            ShoutExpiry = SEnvir.Now.AddSeconds(10);
 
             //Broadcast Appearance(?)
 
             Enqueue(new S.StartGame { Result = StartGameResult.Success, StartInformation = GetStartInformation() });
             //Send Items
 
-            Connection.ReceiveChat(Connection.Language.Welcome, MessageType.Announcement);
+            Connection.ReceiveChatWithObservers(con => con.Language.Welcome, MessageType.Announcement);
 
             SendGuildInfo();
 
@@ -1115,7 +1142,7 @@ namespace Server.Models
                 con.Enqueue(new S.RefineList { List = refines });
 
 
-            con.Enqueue(new S.StatsUpdate { Stats = Stats, HermitStats = Character.HermitStats, HermitPoints = Math.Max(0, Level - 39 - Character.SpentPoints) });
+            con.Enqueue(new S.StatsUpdate { Stats = Stats, HermitStats = Config.EnableHermit ? Character.HermitStats : new Stats(), HermitPoints = Math.Max(0, Level - 39 - Character.SpentPoints) });
 
             con.Enqueue(new S.WeightUpdate { BagWeight = BagWeight, WearWeight = WearWeight, HandWeight = HandWeight });
 
@@ -1167,7 +1194,7 @@ namespace Server.Models
                 foreach (PlayerObject ob in GroupMembers)
                     con.Enqueue(new S.GroupMember { ObjectID = ob.ObjectID, Name = ob.Name });
 
-            con.ReceiveChat(string.Format(con.Language.WelcomeObserver, Name), MessageType.Announcement);
+            con.ReceiveChatWithObservers(c => string.Format(c.Language.WelcomeObserver, Name), MessageType.Announcement);
 
             if (Character.Account.GuildMember != null)
                 foreach (GuildWarInfo warInfo in SEnvir.GuildWarInfoList.Binding)
@@ -1198,7 +1225,7 @@ namespace Server.Models
 
             if (!InSafeZone)
             {
-                Connection.ReceiveChat(Connection.Language.ObserverChangeFail, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.ObserverChangeFail, MessageType.System);
                 return;
             }
 
@@ -1213,7 +1240,6 @@ namespace Server.Models
             }
 
             ApplyObserverBuff();
-
         }
 
         private void NewCharacter()
@@ -1327,7 +1353,13 @@ namespace Server.Models
                 RemoveMount();
 
             ApplyMapBuff();
+
+            if (PlayerMoveMap.QuickCheck(this))
+            {
+                SEnvir.EventHandler.Process(this, "PLAYERMOVEMAP");
+            }
         }
+
         protected override void OnLocationChanged()
         {
             base.OnLocationChanged();
@@ -1357,16 +1389,18 @@ namespace Server.Models
             }
             else if (Spawned && CurrentMap.Info.CanMine)
                 PauseBuffs();
+
+            if (PlayerMoverRegion.QuickCheck(this))
+            {
+                SEnvir.EventHandler.Process(this, "PLAYERMOVEREGION");
+            }
         }
+
         public override void OnDespawned()
         {
             base.OnDespawned();
 
             SEnvir.Players.Remove(this);
-        }
-        public override void OnSafeDespawn()
-        {
-            throw new NotImplementedException();
         }
 
         public override void CleanUp()
@@ -1434,10 +1468,14 @@ namespace Server.Models
             foreach (Match match in matches)
             {
                 if (!int.TryParse(match.Groups["ID"].Value, out int itemIndex)) continue;
+
                 UserItem item = Inventory.FirstOrDefault(e => e != null && e.Index == itemIndex);
+
                 if (item == null)
                     item = Storage.FirstOrDefault(e => e != null && e.Index == itemIndex);
                 if (item == null)
+                    item = Equipment.FirstOrDefault(e => e != null && e.Index == itemIndex);
+                if (item == null && Companion != null)
                     item = Companion.Inventory.FirstOrDefault(e => e != null && e.Index == itemIndex);
                 if (item == null)
                     continue;
@@ -1449,6 +1487,8 @@ namespace Server.Models
 
             if (text.StartsWith("/"))
             {
+                if (SEnvir.Now < Character.Account.ChatBanExpiry) return;
+
                 //Private Message
                 text = text.Remove(0, 1);
                 parts = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
@@ -1459,7 +1499,7 @@ namespace Server.Models
 
                 if (con == null || (con.Stage != GameStage.Observer && con.Stage != GameStage.Game) || SEnvir.IsBlocking(Character.Account, con.Account))
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.CannotFindPlayer, parts[0]), MessageType.System, linkedItems);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.CannotFindPlayer, parts[0]), MessageType.System, linkedItems);
                     return;
                 }
 
@@ -1467,20 +1507,18 @@ namespace Server.Models
                 {
                     if (BlockWhisper)
                     {
-                        Connection.ReceiveChat(Connection.Language.BlockingWhisper, MessageType.System, linkedItems);
+                        Connection.ReceiveChatWithObservers(con => con.Language.BlockingWhisper, MessageType.System, linkedItems);
                         return;
                     }
 
                     if (con.Player != null && con.Player.BlockWhisper)
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.PlayerBlockingWhisper, parts[0]), MessageType.System, linkedItems);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.PlayerBlockingWhisper, parts[0]), MessageType.System, linkedItems);
                         return;
                     }
                 }
 
                 Connection.ReceiveChat($"/{text}", MessageType.WhisperOut, linkedItems);
-
-                if (SEnvir.Now < Character.Account.ChatBanExpiry) return;
 
                 con.ReceiveChat($"{Name}=> {text.Remove(0, parts[0].Length)}", Character.Account.TempAdmin ? MessageType.GMWhisperIn : MessageType.WhisperIn, linkedItems);
             }
@@ -1518,18 +1556,18 @@ namespace Server.Models
             {
                 if (!Character.Account.TempAdmin)
                 {
-                    if (SEnvir.Now < Character.Account.GlobalTime)
+                    if (SEnvir.Now < Character.Account.GlobalShoutExpiry)
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.GlobalDelay, Math.Ceiling((Character.Account.GlobalTime - SEnvir.Now).TotalSeconds)), MessageType.System, linkedItems);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GlobalDelay, Math.Ceiling((Character.Account.GlobalShoutExpiry - SEnvir.Now).TotalSeconds)), MessageType.System, linkedItems);
                         return;
                     }
                     if (Level < 33 && Stats[Stat.GlobalShout] == 0)
                     {
-                        Connection.ReceiveChat(Connection.Language.GlobalLevel, MessageType.System, linkedItems);
+                        Connection.ReceiveChatWithObservers(con => con.Language.GlobalLevel, MessageType.System, linkedItems);
                         return;
                     }
 
-                    Character.Account.GlobalTime = SEnvir.Now.AddSeconds(30);
+                    Character.Account.GlobalShoutExpiry = SEnvir.Now.AddSeconds(30);
                 }
 
                 text = string.Format("(!@){0}: {1}", Name, text.Remove(0, 2));
@@ -1553,20 +1591,20 @@ namespace Server.Models
                 //Shout
                 if (!Character.Account.TempAdmin)
                 {
-                    if (SEnvir.Now < ShoutTime)
+                    if (SEnvir.Now < ShoutExpiry)
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.ShoutDelay, Math.Ceiling((ShoutTime - SEnvir.Now).TotalSeconds)), MessageType.System, linkedItems);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.ShoutDelay, Math.Ceiling((ShoutExpiry - SEnvir.Now).TotalSeconds)), MessageType.System, linkedItems);
                         return;
                     }
                     if (Level < 2)
                     {
-                        Connection.ReceiveChat(Connection.Language.ShoutLevel, MessageType.System, linkedItems);
+                        Connection.ReceiveChatWithObservers(con => con.Language.ShoutLevel, MessageType.System, linkedItems);
                         return;
                     }
                 }
 
                 text = string.Format("(!){0}: {1}", Name, text.Remove(0, 1));
-                ShoutTime = SEnvir.Now + Config.ShoutDelay;
+                ShoutExpiry = SEnvir.Now + Config.ShoutDelay;
 
                 foreach (PlayerObject player in CurrentMap.Players)
                 {
@@ -1708,9 +1746,9 @@ namespace Server.Models
             {
                 if (!con.Account.LastCharacter.Account.TempAdmin)
                 {
-                    if (SEnvir.Now < con.Account.LastCharacter.Account.GlobalTime)
+                    if (SEnvir.Now < con.Account.LastCharacter.Account.GlobalShoutExpiry)
                     {
-                        con.ReceiveChat(string.Format(con.Language.GlobalDelay, Math.Ceiling((con.Account.GlobalTime - SEnvir.Now).TotalSeconds)), MessageType.System);
+                        con.ReceiveChat(string.Format(con.Language.GlobalDelay, Math.Ceiling((con.Account.GlobalShoutExpiry - SEnvir.Now).TotalSeconds)), MessageType.System);
                         return;
                     }
 
@@ -1720,7 +1758,7 @@ namespace Server.Models
                         return;
                     }
 
-                    con.Account.LastCharacter.Account.GlobalTime = SEnvir.Now.AddSeconds(30);
+                    con.Account.LastCharacter.Account.GlobalShoutExpiry = SEnvir.Now.AddSeconds(30);
                 }
 
                 text = string.Format("(!@){0}: {1}", con.Account.LastCharacter.CharacterName, text.Remove(0, 2));
@@ -1805,6 +1843,8 @@ namespace Server.Models
             {
                 packet.GuildName = target.Account.GuildMember.Guild.GuildName;
                 packet.GuildRank = target.Account.GuildMember.Rank;
+                packet.GuildFlag = target.Account.GuildMember.Guild.Flag;
+                packet.GuildColour = target.Account.GuildMember.Guild.Colour;
             }
 
             //if (target.Player != null)
@@ -1856,7 +1896,6 @@ namespace Server.Models
             });
         }
 
-
         public void GainExperience(decimal amount, bool huntGold, int gainLevel = Int32.MaxValue, bool rateEffected = true)
         {
             if (rateEffected)
@@ -1886,7 +1925,7 @@ namespace Server.Models
             if (amount == 0) return;
 
             Experience += amount;
-            Enqueue(new S.GainedExperience { Amount = amount });
+            ExperienceAccumulated += amount;
 
             UserItem weapon = Equipment[(int)EquipmentSlot.Weapon];
 
@@ -1903,7 +1942,6 @@ namespace Server.Models
                         weapon.Flags |= UserItemFlags.Refinable;
                 }
             }
-
 
             if (huntGold)
             {
@@ -1924,12 +1962,14 @@ namespace Server.Models
                 return;
             }
 
-            Experience -= MaxExperience;
+            ProcessExperience(true);
 
+            Experience -= MaxExperience;
 
             Level++;
             LevelUp();
         }
+
         public void LevelUp()
         {
             RefreshStats();
@@ -2064,6 +2104,26 @@ namespace Server.Models
                     if (ele != Stat.None)
                         Stats[ele] += item.Stats.GetWeaponElementValue() + item.Info.Stats.GetWeaponElementValue();
                 }
+
+                if (item.Info.ItemEffect == ItemEffect.MagicRing)
+                {
+                    MagicInfo info = SEnvir.GetMagicInfo(item.Info.Shape);
+
+                    if (info != null && info.School != MagicSchool.None)
+                    {
+                        if (!GetMagic(info.Magic, out MagicObject magicObject))
+                        {
+                            var magic = SEnvir.UserMagicList.CreateNewObject();
+                            magic.Character = Character;
+                            magic.Info = info;
+                            magic.ItemRequired = true;
+
+                            magicObject = SetupMagic(magic);
+                            Enqueue(new S.NewMagic { Magic = magic.ToClientInfo() });
+                            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.LearnBookSuccess, magic.Info.Name), MessageType.System);
+                        }
+                    }
+                }
             }
 
             if (GroupMembers != null && GroupMembers.Count >= 8)
@@ -2100,7 +2160,7 @@ namespace Server.Models
             {
                 var magicObject = MagicObjects[type];
 
-                if (Level < magicObject.Magic.Info.NeedLevel1) continue;
+                if (!magicObject.CanUseMagic()) continue;
 
                 Stats.Add(magicObject.GetPassiveStats());
             }
@@ -2230,7 +2290,12 @@ namespace Server.Models
             Stats[Stat.DropRate] += 20 * Stats[Stat.Rebirth];
             Stats[Stat.GoldRate] += 20 * Stats[Stat.Rebirth];
 
-            Enqueue(new S.StatsUpdate { Stats = Stats, HermitStats = Character.HermitStats, HermitPoints = Math.Max(0, Level - 39 - Character.SpentPoints) });
+            Enqueue(new S.StatsUpdate 
+            { 
+                Stats = Stats, 
+                HermitStats = Config.EnableHermit ? Character.HermitStats : new Stats(), 
+                HermitPoints = Math.Max(0, Level - 39 - Character.SpentPoints)
+            });
 
             S.DataObjectMaxHealthMana p = new S.DataObjectMaxHealthMana { ObjectID = ObjectID, MaxHealth = Stats[Stat.Health], MaxMana = Stats[Stat.Mana] };
 
@@ -2300,13 +2365,19 @@ namespace Server.Models
             Stats[Stat.SkillRate] = 1;
             Stats[Stat.CriticalChance] = 1;
 
-            Stats.Add(Character.HermitStats);
+            if (Config.EnableHermit)
+            {
+                Stats.Add(Character.HermitStats);
+            }
 
             Stats[Stat.BaseHealth] = Stats[Stat.Health];
             Stats[Stat.BaseMana] = Stats[Stat.Mana];
         }
+
         public void AssignHermit(Stat stat)
         {
+            if (!Config.EnableHermit) return;
+
             if (Level - 39 - Character.SpentPoints <= 0) return;
 
             switch (stat)
@@ -2364,7 +2435,7 @@ namespace Server.Models
                 default:
                     Character.Account.Banned = true;
                     Character.Account.BanReason = "Attempted to Exploit hermit.";
-                    Character.Account.ExpiryDate = SEnvir.Now.AddYears(10);
+                    Character.Account.BanExpiry = SEnvir.Now.AddYears(10);
                     return;
             }
 
@@ -2557,6 +2628,8 @@ namespace Server.Models
             {
                 if (!Config.TestServer && Stats[Stat.TeleportRing] == 0) return;
 
+                if (CurrentMap.Instance != null && !CurrentMap.Instance.AllowTeleport) return;
+
                 if (!CurrentMap.Info.AllowRT || !CurrentMap.Info.AllowTT) return;
 
                 if (!destInfo.AllowRT || !destInfo.AllowTT) return;
@@ -2591,19 +2664,19 @@ namespace Server.Models
         {
             if (Character.Partner != null)
             {
-                Connection.ReceiveChat(Connection.Language.MarryAlreadyMarried, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryAlreadyMarried, MessageType.System);
                 return;
             }
 
             if (Level < 22)
             {
-                Connection.ReceiveChat(Connection.Language.MarryNeedLevel, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryNeedLevel, MessageType.System);
                 return;
             }
 
             if (Gold.Amount < 500000)
             {
-                Connection.ReceiveChat(Connection.Language.MarryNeedGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryNeedGold, MessageType.System);
                 return;
             }
 
@@ -2611,7 +2684,7 @@ namespace Server.Models
 
             if (cell?.Objects == null)
             {
-                Connection.ReceiveChat(Connection.Language.MarryNotFacing, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryNotFacing, MessageType.System);
                 return;
             }
 
@@ -2625,39 +2698,39 @@ namespace Server.Models
 
             if (player == null || player.Direction != Functions.ShiftDirection(Direction, 4))
             {
-                Connection.ReceiveChat(Connection.Language.MarryNotFacing, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryNotFacing, MessageType.System);
                 return;
             }
 
             if (player.Character.Partner != null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.MarryTargetAlreadyMarried, player.Character.CharacterName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryTargetAlreadyMarried, player.Character.CharacterName), MessageType.System);
                 return;
             }
 
             if (player.MarriageInvitation != null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.MarryTargetHasProposal, player.Character.CharacterName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryTargetHasProposal, player.Character.CharacterName), MessageType.System);
                 return;
             }
 
             if (player.Level < 22)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.MarryTargetNeedLevel, player.Character.CharacterName), MessageType.System);
-                player.Connection.ReceiveChat(player.Connection.Language.MarryNeedLevel, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryTargetNeedLevel, player.Character.CharacterName), MessageType.System);
+                player.Connection.ReceiveChatWithObservers(con => con.Language.MarryNeedLevel, MessageType.System);
                 return;
             }
 
             if (player.Gold.Amount < 500000)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.MarryTargetNeedGold, player.Character.CharacterName), MessageType.System);
-                player.Connection.ReceiveChat(player.Connection.Language.MarryNeedGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryTargetNeedGold, player.Character.CharacterName), MessageType.System);
+                player.Connection.ReceiveChatWithObservers(con => con.Language.MarryNeedGold, MessageType.System);
                 return;
             }
             if (player.Dead || Dead)
             {
-                Connection.ReceiveChat(Connection.Language.MarryDead, MessageType.System);
-                player.Connection.ReceiveChat(player.Connection.Language.MarryDead, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryDead, MessageType.System);
+                player.Connection.ReceiveChatWithObservers(con => con.Language.MarryDead, MessageType.System);
                 return;
             }
 
@@ -2674,22 +2747,22 @@ namespace Server.Models
 
             if (Gold.Amount < cost)
             {
-                Connection.ReceiveChat(Connection.Language.MarryNeedGold, MessageType.System);
-                MarriageInvitation.Connection.ReceiveChat(string.Format(MarriageInvitation.Connection.Language.MarryTargetNeedGold, Character.CharacterName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryNeedGold, MessageType.System);
+                MarriageInvitation.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryTargetNeedGold, Character.CharacterName), MessageType.System);
                 return;
             }
 
             if (MarriageInvitation.Gold.Amount < cost)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.MarryTargetNeedGold, MarriageInvitation.Character.CharacterName), MessageType.System);
-                MarriageInvitation.Connection.ReceiveChat(MarriageInvitation.Connection.Language.MarryNeedGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryTargetNeedGold, MarriageInvitation.Character.CharacterName), MessageType.System);
+                MarriageInvitation.Connection.ReceiveChatWithObservers(con => con.Language.MarryNeedGold, MessageType.System);
                 return;
             }
 
             Character.Partner = MarriageInvitation.Character;
 
-            Connection.ReceiveChat(string.Format(Connection.Language.MarryComplete, MarriageInvitation.Character.CharacterName), MessageType.System);
-            MarriageInvitation.Connection.ReceiveChat(string.Format(MarriageInvitation.Connection.Language.MarryComplete, Character.CharacterName), MessageType.System);
+            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryComplete, MarriageInvitation.Character.CharacterName), MessageType.System);
+            MarriageInvitation.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryComplete, Character.CharacterName), MessageType.System);
 
             Gold.Amount -= cost;
             MarriageInvitation.Gold.Amount -= cost;
@@ -2711,7 +2784,7 @@ namespace Server.Models
             Character.Partner = null;
 
             MarriageRemoveRing();
-            Connection.ReceiveChat(string.Format(Connection.Language.MarryDivorce, partner.CharacterName), MessageType.System);
+            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryDivorce, partner.CharacterName), MessageType.System);
 
             Enqueue(GetMarriageInfo());
 
@@ -2719,7 +2792,7 @@ namespace Server.Models
             if (partner.Player != null)
             {
                 partner.Player.MarriageRemoveRing();
-                partner.Player.Connection.ReceiveChat(string.Format(partner.Player.Connection.Language.MarryDivorce, Character.CharacterName), MessageType.System);
+                partner.Player.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryDivorce, Character.CharacterName), MessageType.System);
                 partner.Player.Enqueue(partner.Player.GetMarriageInfo());
             }
             else
@@ -2741,6 +2814,8 @@ namespace Server.Models
             UserItem ring = Inventory[index];
 
             if (ring == null || ring.Info.ItemType != ItemType.Ring) return;
+
+            if (!(CanWearItem(ring, EquipmentSlot.RingL) || CanWearItem(ring, EquipmentSlot.RingR))) return;
 
             ring.Flags |= UserItemFlags.Marriage;
 
@@ -2773,61 +2848,56 @@ namespace Server.Models
 
             if (Dead)
             {
-                Connection.ReceiveChat(Connection.Language.MarryTeleportDead, MessageType.System);
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.MarryTeleportDead, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryTeleportDead, MessageType.System);
                 return;
             }
 
             if (Stats[Stat.PKPoint] >= Config.RedPoint)
             {
-                Connection.ReceiveChat(Connection.Language.MarryTeleportPK, MessageType.System);
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.MarryTeleportPK, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryTeleportPK, MessageType.System);
                 return;
             }
 
             if (SEnvir.Now < Character.MarriageTeleportTime)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.MarryTeleportDelay, Functions.ToString(Character.MarriageTeleportTime - SEnvir.Now, true)), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.MarryTeleportDelay, Functions.ToString(Character.MarriageTeleportTime - SEnvir.Now, true)), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MarryTeleportDelay, Functions.ToString(Character.MarriageTeleportTime - SEnvir.Now, true)), MessageType.System);
                 return;
             }
 
-            if (Character.Partner.Player == null)
+            if (Character.Partner.Player?.Node == null)
             {
-                Connection.ReceiveChat(Connection.Language.MarryTeleportOffline, MessageType.System);
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.MarryTeleportOffline, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryTeleportOffline, MessageType.System);
                 return;
             }
             if (Character.Partner.Player.Dead)
             {
-                Connection.ReceiveChat(Connection.Language.MarryTeleportPartnerDead, MessageType.System);
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.MarryTeleportPartnerDead, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryTeleportPartnerDead, MessageType.System);
                 return;
             }
 
             if (!Character.Partner.Player.CurrentMap.Info.CanMarriageRecall)
             {
-                Connection.ReceiveChat(Connection.Language.MarryTeleportMap, MessageType.System);
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.MarryTeleportMap, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryTeleportMap, MessageType.System);
+                return;
+            }
+
+            if (Character.Partner.Player.CurrentMap.Instance != null && !Character.Partner.Player.CurrentMap.Instance.AllowTeleport)
+            {
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryTeleportMap, MessageType.System);
+                return;
+            }
+
+            if (CurrentMap.Instance != null && !CurrentMap.Instance.AllowTeleport)
+            {
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryTeleportMapEscape, MessageType.System);
                 return;
             }
 
             if (!CurrentMap.Info.AllowTT)
             {
-                Connection.ReceiveChat(Connection.Language.MarryTeleportMapEscape, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.MarryTeleportMapEscape, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MarryTeleportMapEscape, MessageType.System);
                 return;
             }
-
 
             if (Teleport(Character.Partner.Player.CurrentMap, Character.Partner.Player.CurrentMap.GetRandomLocation(Character.Partner.Player.CurrentLocation, 10)))
                 Character.MarriageTeleportTime = SEnvir.Now.AddSeconds(120);
@@ -2862,7 +2932,7 @@ namespace Server.Models
 
             if (info.Available || Character.Account.CompanionUnlocks.Any(x => x.CompanionInfo == info))
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.CompanionAppearanceAlready, info.MonsterInfo.MonsterName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.CompanionAppearanceAlready, info.MonsterInfo.MonsterName), MessageType.System);
                 return;
             }
 
@@ -2881,7 +2951,7 @@ namespace Server.Models
 
             if (item == null)
             {
-                Connection.ReceiveChat(Connection.Language.CompanionNeedTicket, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.CompanionNeedTicket, MessageType.System);
                 return;
             }
 
@@ -2928,19 +2998,19 @@ namespace Server.Models
 
             if (!info.Available && Character.Account.CompanionUnlocks.All(x => x.CompanionInfo != info))
             {
-                Connection.ReceiveChat(Connection.Language.CompanionAppearanceAlready, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.CompanionAppearanceAlready, MessageType.System);
                 return;
             }
 
             if (info.Price > Gold.Amount)
             {
-                Connection.ReceiveChat(Connection.Language.CompanionNeedGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.CompanionNeedGold, MessageType.System);
                 return;
             }
 
             if (!Globals.GuildNameRegex.IsMatch(p.Name))
             {
-                Connection.ReceiveChat(Connection.Language.CompanionBadName, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.CompanionBadName, MessageType.System);
                 return;
             }
 
@@ -2985,7 +3055,7 @@ namespace Server.Models
             if (info.Character != null)
             {
                 if (info.Character != Character)
-                    Connection.ReceiveChat(string.Format(Connection.Language.CompanionRetrieveFailed, info.Name, info.Character.CharacterName), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.CompanionRetrieveFailed, info.Name, info.Character.CharacterName), MessageType.System);
                 return;
             }
 
@@ -3102,7 +3172,6 @@ namespace Server.Models
 
             if (Companion.UserCompanion.Level >= 15)
                 buffStats.Add(Companion.UserCompanion.Level15);
-
 
             buff.Stats = buffStats;
             RefreshStats();
@@ -3257,13 +3326,13 @@ namespace Server.Models
 
                 if (hasChoice && !hasChosen)
                 {
-                    Connection.ReceiveChat(Connection.Language.QuestSelectReward, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.QuestSelectReward, MessageType.System);
                     return;
                 }
 
                 if (!CanGainItems(false, checks.ToArray()))
                 {
-                    Connection.ReceiveChat(Connection.Language.QuestNeedSpace, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.QuestNeedSpace, MessageType.System);
                     return;
                 }
 
@@ -3294,6 +3363,17 @@ namespace Server.Models
             quest.Track = p.Track;
         }
 
+        public void QuestAbandon(C.QuestAbandon p)
+        {
+            UserQuest quest = Quests.FirstOrDefault(x => x.Index == p.Index);
+
+            if (quest == null || quest.Completed) return;
+
+            Character.Quests.Remove(quest);
+
+            Enqueue(new S.QuestCancelled { Index = quest.Index });
+        }
+
         #endregion
 
         #region Mail
@@ -3318,13 +3398,13 @@ namespace Server.Models
 
             if (!InSafeZone && !Character.Account.TempAdmin)
             {
-                Connection.ReceiveChat(Connection.Language.MailSafeZone, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MailSafeZone, MessageType.System);
                 return;
             }
 
             if (!CanGainItems(false, new ItemCheck(item, item.Count, item.Flags, item.ExpireTime)))
             {
-                Connection.ReceiveChat(Connection.Language.MailNeedSpace, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MailNeedSpace, MessageType.System);
                 return;
             }
 
@@ -3345,7 +3425,7 @@ namespace Server.Models
 
             if (mail.Items.Count > 0)
             {
-                Connection.ReceiveChat(Connection.Language.MailHasItems, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MailHasItems, MessageType.System);
                 return;
             }
 
@@ -3357,35 +3437,54 @@ namespace Server.Models
         {
             Enqueue(new S.MailSend { ObserverPacket = false });
 
+            if (MailTime > SEnvir.Now) return;
+
+            MailTime = SEnvir.Now.AddSeconds(10);
+
             S.ItemsChanged result = new S.ItemsChanged { Links = p.Links };
 
             Enqueue(result);
 
             if (!ParseLinks(p.Links, 0, 5)) return;
 
+            if (p.Recipient == null || p.Recipient.Length > Globals.MaxCharacterNameLength)
+            {
+                return;
+            }
+
             AccountInfo account = SEnvir.GetCharacter(p.Recipient)?.Account;
 
             if (account == null || SEnvir.IsBlocking(Character.Account, account))
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.MailNotFound, p.Recipient), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MailNotFound, p.Recipient), MessageType.System);
                 return;
             }
 
             if (account == Character.Account && !Character.Account.TempAdmin)
             {
-                Connection.ReceiveChat(Connection.Language.MailSelfMail, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MailSelfMail, MessageType.System);
                 return;
             }
 
             if (p.Links.Count > 0 && account.Mail.Sum(x => x.Items.Count) >= Globals.MaxMailStorage)
             {
-                Connection.ReceiveChat(Connection.Language.MailStorageFull, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MailStorageFull, MessageType.System);
                 return;
             }
 
             if (p.Gold < 0 || p.Gold > Gold.Amount)
             {
-                Connection.ReceiveChat(Connection.Language.MailMailCost, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.MailMailCost, MessageType.System);
+                return;
+            }
+
+            if (p.Subject == null || p.Subject.Length > 30)
+            {
+                return;
+            }
+
+            if (p.Message == null || p.Message.Length > 300)
+            {
                 return;
             }
 
@@ -3399,7 +3498,7 @@ namespace Server.Models
                     case GridType.Inventory:
                         if (!InSafeZone && !Character.Account.TempAdmin)
                         {
-                            Connection.ReceiveChat(Connection.Language.MailSendSafeZone, MessageType.System);
+                            Connection.ReceiveChatWithObservers(con => con.Language.MailSendSafeZone, MessageType.System);
                             return;
                         }
                         fromArray = Inventory;
@@ -3415,7 +3514,7 @@ namespace Server.Models
 
                         if (!InSafeZone && !Character.Account.TempAdmin)
                         {
-                            Connection.ReceiveChat(Connection.Language.MailSendSafeZone, MessageType.System);
+                            Connection.ReceiveChatWithObservers(con => con.Language.MailSendSafeZone, MessageType.System);
                             return;
                         }
 
@@ -3533,7 +3632,7 @@ namespace Server.Models
                     array = Inventory;
                     if (!InSafeZone && !Character.Account.TempAdmin)
                     {
-                        Connection.ReceiveChat(Connection.Language.ConsignSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.ConsignSafeZone, MessageType.System);
                         return;
                     }
                     break;
@@ -3549,7 +3648,7 @@ namespace Server.Models
                     array = Companion.Inventory;
                     if (!InSafeZone && !Character.Account.TempAdmin)
                     {
-                        Connection.ReceiveChat(Connection.Language.ConsignSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.ConsignSafeZone, MessageType.System);
                         return;
                     }
                     break;
@@ -3573,7 +3672,7 @@ namespace Server.Models
 
             if (Character.Account.Auctions.Count >= Character.Account.HighestLevel() * 3 + Character.Account.StorageSize - Globals.StorageSize)
             {
-                Connection.ReceiveChat(Connection.Language.ConsignLimit, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.ConsignLimit, MessageType.System);
                 return;
             }
 
@@ -3581,18 +3680,18 @@ namespace Server.Models
             {
                 if (Character.Account.GuildMember == null)
                 {
-                    Connection.ReceiveChat(Connection.Language.ConsignGuildFundsGuild, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.ConsignGuildFundsGuild, MessageType.System);
                     return;
                 }
                 if ((Character.Account.GuildMember.Permission & GuildPermission.FundsMarket) != GuildPermission.FundsMarket)
                 {
-                    Connection.ReceiveChat(Connection.Language.ConsignGuildFundsPermission, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.ConsignGuildFundsPermission, MessageType.System);
                     return;
                 }
 
                 if (cost > Character.Account.GuildMember.Guild.GuildFunds)
                 {
-                    Connection.ReceiveChat(Connection.Language.ConsignGuildFundsCost, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.ConsignGuildFundsCost, MessageType.System);
                     return;
                 }
 
@@ -3609,7 +3708,7 @@ namespace Server.Models
             {
                 if (cost > Gold.Amount)
                 {
-                    Connection.ReceiveChat(Connection.Language.ConsignCost, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.ConsignCost, MessageType.System);
                     return;
                 }
 
@@ -3652,10 +3751,7 @@ namespace Server.Models
             result.Success = true;
 
             Enqueue(new S.MarketPlaceConsign { Consignments = new List<ClientMarketPlaceInfo> { auction.ToClientInfo(Character.Account) }, ObserverPacket = false });
-            Connection.ReceiveChat(Connection.Language.ConsignComplete, MessageType.System);
-
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(con.Language.ConsignComplete, MessageType.System);
+            Connection.ReceiveChatWithObservers(con => con.Language.ConsignComplete, MessageType.System);
         }
         public void MarketPlaceCancelConsign(C.MarketPlaceCancelConsign p)
         {
@@ -3667,13 +3763,13 @@ namespace Server.Models
 
             if (info.Item == null)
             {
-                Connection.ReceiveChat(Connection.Language.ConsignAlreadySold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.ConsignAlreadySold, MessageType.System);
                 return;
             }
 
             if (info.Item.Count < p.Count)
             {
-                Connection.ReceiveChat(Connection.Language.ConsignNotEnough, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.ConsignNotEnough, MessageType.System);
                 return;
             }
 
@@ -3736,19 +3832,19 @@ namespace Server.Models
 
             if (info.Item == null)
             {
-                Connection.ReceiveChat(Connection.Language.ConsignAlreadySold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.ConsignAlreadySold, MessageType.System);
                 return;
             }
 
             if (info.Account == Character.Account && !Character.Account.TempAdmin)
             {
-                Connection.ReceiveChat(Connection.Language.ConsignBuyOwnItem, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyOwnItem, MessageType.System);
                 return;
             }
 
             if (info.Item.Count < p.Count)
             {
-                Connection.ReceiveChat(Connection.Language.ConsignNotEnough, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.ConsignNotEnough, MessageType.System);
                 return;
             }
 
@@ -3762,18 +3858,18 @@ namespace Server.Models
             {
                 if (Character.Account.GuildMember == null)
                 {
-                    Connection.ReceiveChat(Connection.Language.ConsignBuyGuildFundsGuild, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyGuildFundsGuild, MessageType.System);
                     return;
                 }
                 if ((Character.Account.GuildMember.Permission & GuildPermission.FundsMarket) != GuildPermission.FundsMarket)
                 {
-                    Connection.ReceiveChat(Connection.Language.ConsignBuyGuildFundsPermission, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyGuildFundsPermission, MessageType.System);
                     return;
                 }
 
                 if (cost > Character.Account.GuildMember.Guild.GuildFunds)
                 {
-                    Connection.ReceiveChat(Connection.Language.ConsignBuyGuildFundsCost, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyGuildFundsCost, MessageType.System);
                     return;
                 }
 
@@ -3790,7 +3886,7 @@ namespace Server.Models
             {
                 if (cost > Gold.Amount)
                 {
-                    Connection.ReceiveChat(Connection.Language.ConsignBuyCost, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.ConsignBuyCost, MessageType.System);
                     return;
                 }
 
@@ -3922,7 +4018,7 @@ namespace Server.Models
 
             if (!info.Available)
             {
-                Connection.ReceiveChat(Connection.Language.StoreNotAvailable, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.StoreNotAvailable, MessageType.System);
                 return;
             }
 
@@ -3950,7 +4046,7 @@ namespace Server.Models
 
             if (!CanGainItems(false, check))
             {
-                Connection.ReceiveChat(Connection.Language.StoreNeedSpace, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.StoreNeedSpace, MessageType.System);
                 return;
             }
 
@@ -3960,7 +4056,7 @@ namespace Server.Models
                 {
                     if (cost > HuntGold.Amount)
                     {
-                        Connection.ReceiveChat(Connection.Language.StoreCost, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.StoreCost, MessageType.System);
                         return;
                     }
 
@@ -3972,7 +4068,7 @@ namespace Server.Models
                 {
                     if (cost > GameGold.Amount)
                     {
-                        Connection.ReceiveChat(Connection.Language.StoreCost, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.StoreCost, MessageType.System);
                         return;
                     }
 
@@ -4064,21 +4160,21 @@ namespace Server.Models
 
                 if (!result)
                 {
-                    Connection.ReceiveChat(Connection.Language.GuildNeedHorn, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.GuildNeedHorn, MessageType.System);
                     return;
                 }
             }
 
             if (cost > Gold.Amount)
             {
-                Connection.ReceiveChat(Connection.Language.GuildNeedGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildNeedGold, MessageType.System);
                 return;
             }
 
 
             if (!Globals.GuildNameRegex.IsMatch(p.Name))
             {
-                Connection.ReceiveChat(Connection.Language.GuildBadName, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildBadName, MessageType.System);
                 return;
             }
 
@@ -4087,7 +4183,7 @@ namespace Server.Models
 
             if (info != null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildNameTaken, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildNameTaken, MessageType.System);
                 return;
             }
 
@@ -4142,7 +4238,7 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.EditNotice) != GuildPermission.EditNotice)
             {
-                Connection.ReceiveChat(Connection.Language.GuildNoticePermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildNoticePermission, MessageType.System);
                 return;
             }
 
@@ -4162,13 +4258,13 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
-                Connection.ReceiveChat(Connection.Language.GuildEditMemberPermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildEditMemberPermission, MessageType.System);
                 return;
             }
 
             if (p.Rank.Length > Globals.MaxCharacterNameLength)
             {
-                Connection.ReceiveChat(Connection.Language.GuildMemberLength, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildMemberLength, MessageType.System);
                 return;
             }
 
@@ -4179,7 +4275,7 @@ namespace Server.Models
 
                 if (info == null)
                 {
-                    Connection.ReceiveChat(Connection.Language.GuildMemberNotFound, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.GuildMemberNotFound, MessageType.System);
                     return;
                 }
 
@@ -4213,7 +4309,7 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
-                Connection.ReceiveChat(Connection.Language.GuildKickPermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildKickPermission, MessageType.System);
                 return;
             }
 
@@ -4221,13 +4317,13 @@ namespace Server.Models
 
             if (info == null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildMemberNotFound, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildMemberNotFound, MessageType.System);
                 return;
             }
 
             if (info == Character.Account.GuildMember)
             {
-                Connection.ReceiveChat(Connection.Language.GuildKickSelf, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildKickSelf, MessageType.System);
                 return;
             }
 
@@ -4270,7 +4366,7 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
-                Connection.ReceiveChat(Connection.Language.GuildManagePermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
             }
 
@@ -4293,19 +4389,19 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
-                Connection.ReceiveChat(Connection.Language.GuildManagePermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
             }
 
             if (guild.MemberLimit >= 100)
             {
-                Connection.ReceiveChat(Connection.Language.GuildMemberLimit, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildMemberLimit, MessageType.System);
                 return;
             }
 
             if (guild.GuildFunds < Globals.GuildMemberCost)
             {
-                Connection.ReceiveChat(Connection.Language.GuildMemberCost, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildMemberCost, MessageType.System);
                 return;
             }
 
@@ -4327,20 +4423,20 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
-                Connection.ReceiveChat(Connection.Language.GuildManagePermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
             }
 
             GuildInfo guild = Character.Account.GuildMember.Guild;
             if (guild.StorageSize >= 500)
             {
-                Connection.ReceiveChat(Connection.Language.GuildStorageLimit, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildStorageLimit, MessageType.System);
                 return;
             }
 
             if (guild.GuildFunds < Globals.GuildStorageCost)
             {
-                Connection.ReceiveChat(Connection.Language.GuildStorageCost, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildStorageCost, MessageType.System);
                 return;
             }
 
@@ -4361,7 +4457,7 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.AddMember) != GuildPermission.AddMember)
             {
-                Connection.ReceiveChat(Connection.Language.GuildInvitePermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildInvitePermission, MessageType.System);
                 return;
             }
 
@@ -4369,38 +4465,38 @@ namespace Server.Models
 
             if (player == null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.CannotFindPlayer, p.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.CannotFindPlayer, p.Name), MessageType.System);
                 return;
             }
 
             if (player.Character.Account.GuildMember != null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildInviteGuild, player.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInviteGuild, player.Name), MessageType.System);
                 return;
             }
 
             if (player.GuildInvitation != null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildInviteInvited, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildInviteInvited, MessageType.System);
                 return;
             }
 
             if (SEnvir.IsBlocking(Character.Account, player.Character.Account))
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildInviteNotAllowed, player.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInviteNotAllowed, player.Name), MessageType.System);
                 return;
             }
             if (!player.Character.Account.AllowGuild)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildInviteNotAllowed, player.Name), MessageType.System);
-                player.Connection.ReceiveChat(string.Format(player.Connection.Language.GuildInvitedNotAllowed, Character.CharacterName, Character.Account.GuildMember.Guild.GuildName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInviteNotAllowed, player.Name), MessageType.System);
+                player.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInvitedNotAllowed, Character.CharacterName, Character.Account.GuildMember.Guild.GuildName), MessageType.System);
                 return;
             }
 
 
             if (Character.Account.GuildMember.Guild.Members.Count >= Character.Account.GuildMember.Guild.MemberLimit)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildInviteRoom, player.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildInviteRoom, player.Name), MessageType.System);
                 return;
             }
 
@@ -4414,13 +4510,13 @@ namespace Server.Models
 
             if (Character.Account.GuildMember == null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildNoGuild, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildNoGuild, MessageType.System);
                 return;
             }
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.StartWar) != GuildPermission.StartWar)
             {
-                Connection.ReceiveChat(Connection.Language.GuildWarPermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildWarPermission, MessageType.System);
                 return;
             }
 
@@ -4428,13 +4524,13 @@ namespace Server.Models
 
             if (guild == null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildNotFoundGuild, guildName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildNotFoundGuild, guildName), MessageType.System);
                 return;
             }
 
             if (guild == Character.Account.GuildMember.Guild)
             {
-                Connection.ReceiveChat(Connection.Language.GuildWarOwnGuild, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildWarOwnGuild, MessageType.System);
                 result.Success = true;
                 return;
             }
@@ -4442,13 +4538,13 @@ namespace Server.Models
             if (SEnvir.GuildWarInfoList.Binding.Any(x => (x.Guild1 == guild && x.Guild2 == Character.Account.GuildMember.Guild) ||
                                                          (x.Guild2 == guild && x.Guild1 == Character.Account.GuildMember.Guild)))
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildAlreadyWar, guild.GuildName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildAlreadyWar, guild.GuildName), MessageType.System);
                 return;
             }
 
             if (Globals.GuildWarCost > Character.Account.GuildMember.Guild.GuildFunds)
             {
-                Connection.ReceiveChat(Connection.Language.GuildWarCost, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildWarCost, MessageType.System);
                 return;
             }
 
@@ -4478,25 +4574,25 @@ namespace Server.Models
         {
             if (Character.Account.GuildMember == null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildNoGuild, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildNoGuild, MessageType.System);
                 return;
             }
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
-                Connection.ReceiveChat(Connection.Language.GuildWarPermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildWarPermission, MessageType.System);
                 return;
             }
 
             if (Character.Account.GuildMember.Guild.Castle != null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildConquestCastle, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildConquestCastle, MessageType.System);
                 return;
             }
 
             if (Character.Account.GuildMember.Guild.Conquest != null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildConquestExists, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildConquestExists, MessageType.System);
                 return;
             }
 
@@ -4504,13 +4600,13 @@ namespace Server.Models
 
             if (castle == null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildConquestBadCastle, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildConquestBadCastle, MessageType.System);
                 return;
             }
 
             if (SEnvir.ConquestWars.Count > 0)
             {
-                Connection.ReceiveChat(Connection.Language.GuildConquestProgress, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildConquestProgress, MessageType.System);
                 return;
             }
 
@@ -4518,7 +4614,7 @@ namespace Server.Models
             {
                 if (GetItemCount(castle.Item) == 0)
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.GuildConquestNeedItem, castle.Item.ItemName, castle.Name), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildConquestNeedItem, castle.Item.ItemName, castle.Name), MessageType.System);
                     return;
                 }
 
@@ -4565,7 +4661,7 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
-                Connection.ReceiveChat(Connection.Language.GuildManagePermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
             }
 
@@ -4589,7 +4685,7 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
             {
-                Connection.ReceiveChat(Connection.Language.GuildManagePermission, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildManagePermission, MessageType.System);
                 return;
             }
 
@@ -4608,6 +4704,188 @@ namespace Server.Models
             foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
                 member.Account.Connection?.Player?.Enqueue(update);
         }
+        
+        public void GuildToggleCastleGates()
+        {
+            if (Character.Account.GuildMember == null) return;
+
+            if (Character.Account.GuildMember.Guild.Castle == null)
+            {
+                return;
+            }
+
+            var castle = Character.Account.GuildMember.Guild.Castle;
+
+            var castleRegion = castle.CastleRegion;
+            var map = SEnvir.Maps[castleRegion.Map];
+
+            foreach (var gate in map.CastleGates)
+            {
+                var closeDoor = false;
+
+                if (gate.Node == null || gate.Dead) continue;
+
+                if (gate.Closed)
+                    closeDoor = false;
+                else
+                    closeDoor = true;
+
+                if (closeDoor)
+                {
+                    gate.CloseDoor();
+
+                    foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                        member.Account.Connection?.ReceiveChat($"{castle.Name} {gate.MonsterInfo.MonsterName} has been closed", MessageType.System);
+                }
+                else
+                {
+                    gate.OpenDoor();
+
+                    foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                        member.Account.Connection?.ReceiveChat($"{castle.Name} {gate.MonsterInfo.MonsterName} has been opened", MessageType.System);
+                }
+            }
+        }
+
+        public void GuildRepairCastleGates()
+        {
+            if (Character.Account.GuildMember == null) return;
+
+            if (Character.Account.GuildMember.Guild.Castle == null)
+            {
+                return;
+            }
+
+            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            {
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildCastleRepairPermission, MessageType.System);
+                return;
+            }
+
+            var castle = Character.Account.GuildMember.Guild.Castle;
+            var castleRegion = castle.CastleRegion;
+            var map = SEnvir.Maps[castleRegion.Map];
+
+            int cost = 0;
+
+            foreach (var gate in castle.Gates)
+            {
+                if (gate.RepairCost <= 0) continue;
+
+                var mob = map.CastleGates.FirstOrDefault(x => x.GateInfo == gate);
+
+                if (mob == null || mob.Dead)
+                {
+                    cost += gate.RepairCost;
+                }
+                else
+                {
+                    var percent = Math.Abs(mob.CurrentHP) * 100 / mob.Stats[Stat.Health];
+
+                    cost += (gate.RepairCost * percent / 100);
+                }
+            }
+
+            if (cost > Character.Account.GuildMember.Guild.GuildFunds)
+            {
+                Connection.ReceiveChat(string.Format(Connection.Language.GuildRepairCastleGatesCost, cost - Character.Account.GuildMember.Guild.GuildFunds), MessageType.System);
+                return;
+            }
+
+            Character.Account.GuildMember.Guild.GuildFunds -= cost;
+            Character.Account.GuildMember.Guild.DailyGrowth -= cost;
+
+            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+            {
+                member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
+            }
+
+            foreach (var gate in castle.Gates)
+            {
+                var mob = map.CastleGates.FirstOrDefault(x => x.GateInfo == gate);
+
+                if (mob == null)
+                {
+                    mob = MonsterObject.GetMonster(gate.Monster) as CastleGate;
+
+                    mob.Spawn(castle, gate);
+                }
+                else
+                {
+                    mob.RepairGate();
+                }
+            }
+        }
+
+        public void GuildRepairCastleGuards()
+        {
+            if (Character.Account.GuildMember == null) return;
+
+            if (Character.Account.GuildMember.Guild.Castle == null)
+            {
+                return;
+            }
+
+            if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) != GuildPermission.Leader)
+            {
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildCastleRepairPermission, MessageType.System);
+                return;
+            }
+
+            var castle = Character.Account.GuildMember.Guild.Castle;
+            var castleRegion = castle.CastleRegion;
+            var map = SEnvir.Maps[castleRegion.Map];
+
+            int cost = 0;
+
+            foreach (var guard in castle.Guards)
+            {
+                if (guard.RepairCost <= 0) continue;
+
+                var mob = map.CastleGuards.FirstOrDefault(x => x.GuardInfo == guard);
+
+                if (mob == null || mob.Dead)
+                {
+                    cost += guard.RepairCost;
+                }
+                else
+                {
+                    var percent = Math.Abs(mob.CurrentHP) * 100 / mob.Stats[Stat.Health];
+
+                    cost += (guard.RepairCost * percent / 100);
+                }
+            }
+
+            if (cost > Character.Account.GuildMember.Guild.GuildFunds)
+            {
+                Connection.ReceiveChat(string.Format(Connection.Language.GuildRepairCastleGuardsCost, cost - Character.Account.GuildMember.Guild.GuildFunds), MessageType.System);
+                return;
+            }
+
+            Character.Account.GuildMember.Guild.GuildFunds -= cost;
+            Character.Account.GuildMember.Guild.DailyGrowth -= cost;
+
+            foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+            {
+                member.Account.Connection?.Player?.Enqueue(new S.GuildFundsChanged { Change = -cost, ObserverPacket = false });
+            }
+
+            foreach (var guard in castle.Guards)
+            {
+                var mob = map.CastleGuards.FirstOrDefault(x => x.GuardInfo == guard);
+
+                if (mob == null)
+                {
+                    mob = MonsterObject.GetMonster(guard.Monster) as CastleGuard;
+
+                    mob.Spawn(castle, guard);
+                }
+                else
+                {
+                    mob.RepairGuard();
+                }
+            }
+        }
 
         public void GuildJoin()
         {
@@ -4617,29 +4895,29 @@ namespace Server.Models
 
             if (Character.Account.GuildMember != null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildJoinGuild, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildJoinGuild, MessageType.System);
                 return;
             }
             if (Character.Account.GuildTime > SEnvir.Now)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildJoinTime, Functions.ToString(Character.Account.GuildTime - SEnvir.Now, true)), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinTime, Functions.ToString(Character.Account.GuildTime - SEnvir.Now, true)), MessageType.System);
                 return;
             }
             if (GuildInvitation.Character.Account.GuildMember == null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildJoinGuild, GuildInvitation.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinGuild, GuildInvitation.Name), MessageType.System);
                 return;
             }
 
             if ((GuildInvitation.Character.Account.GuildMember.Permission & GuildPermission.AddMember) != GuildPermission.AddMember)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildJoinPermission, GuildInvitation.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinPermission, GuildInvitation.Name), MessageType.System);
                 return;
             }
 
             if (GuildInvitation.Character.Account.GuildMember.Guild.Members.Count >= GuildInvitation.Character.Account.GuildMember.Guild.MemberLimit)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GuildJoinNoRoom, GuildInvitation.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinNoRoom, GuildInvitation.Name), MessageType.System);
                 return;
             }
 
@@ -4652,7 +4930,7 @@ namespace Server.Models
             memberInfo.Permission = GuildInvitation.Character.Account.GuildMember.Guild.DefaultPermission;
 
             SendGuildInfo();
-            Connection.ReceiveChat(string.Format(Connection.Language.GuildJoinWelcome, Name), MessageType.System);
+            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinWelcome, Name), MessageType.System);
 
             Broadcast(new S.GuildChanged { ObjectID = ObjectID, GuildName = memberInfo.Guild.GuildName, GuildRank = memberInfo.Rank });
             AddAllObjects();
@@ -4684,7 +4962,7 @@ namespace Server.Models
 
             if ((Character.Account.GuildMember.Permission & GuildPermission.Leader) == GuildPermission.Leader && info.Guild.Members.Count > 1 && info.Guild.Members.FirstOrDefault(x => x.Index != info.Index && (x.Permission & GuildPermission.Leader) == GuildPermission.Leader) == null)
             {
-                Connection.ReceiveChat(Connection.Language.GuildLeaveFailed, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GuildLeaveFailed, MessageType.System);
                 return;
             }
 
@@ -4698,7 +4976,7 @@ namespace Server.Models
             if (!guild.StarterGuild)
                 Character.Account.GuildTime = SEnvir.Now.AddDays(1);
 
-            Connection.ReceiveChat(Connection.Language.GuildLeave, MessageType.System);
+            Connection.ReceiveChatWithObservers(con => con.Language.GuildLeave, MessageType.System);
             Enqueue(new S.GuildInfo { ObserverPacket = false });
 
             Broadcast(new S.GuildChanged { ObjectID = ObjectID });
@@ -4792,7 +5070,7 @@ namespace Server.Models
 
             SendGuildInfo();
 
-            Connection.ReceiveChat(string.Format(Connection.Language.GuildJoinWelcome, memberInfo.Guild.GuildName), MessageType.System);
+            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildJoinWelcome, memberInfo.Guild.GuildName), MessageType.System);
 
             Broadcast(new S.GuildChanged { ObjectID = ObjectID, GuildName = memberInfo.Guild.GuildName, GuildRank = memberInfo.Rank });
             AddAllObjects();
@@ -4818,16 +5096,14 @@ namespace Server.Models
         #endregion
 
         #region Group
+
         public void GroupSwitch(bool allowGroup)
         {
             if (Character.Account.AllowGroup == allowGroup) return;
 
             if (GroupMembers != null && GroupMembers.Any(x => x.CurrentMap.Instance != null))
             {
-                Connection.ReceiveChat(Connection.Language.InstanceNoAction, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.InstanceNoAction, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.InstanceNoAction, MessageType.System);
                 return;
             }
 
@@ -4843,28 +5119,19 @@ namespace Server.Models
         {
             if (GroupMembers == null)
             {
-                Connection.ReceiveChat(Connection.Language.GroupNoGroup, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.GroupNoGroup, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GroupNoGroup, MessageType.System);
                 return;
             }
 
             if (GroupMembers[0] != this)
             {
-                Connection.ReceiveChat(Connection.Language.GroupNotLeader, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.GroupNotLeader, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GroupNotLeader, MessageType.System);
                 return;
             }
 
             if (GroupMembers.Any(x => x.CurrentMap.Instance != null))
             {
-                Connection.ReceiveChat(Connection.Language.InstanceNoAction, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.InstanceNoAction, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.InstanceNoAction, MessageType.System);
                 return;
             }
 
@@ -4876,20 +5143,14 @@ namespace Server.Models
                 return;
             }
 
-            Connection.ReceiveChat(string.Format(Connection.Language.GroupMemberNotFound, name), MessageType.System);
-
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(string.Format(con.Language.GroupMemberNotFound, name), MessageType.System);
-
+            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GroupMemberNotFound, name), MessageType.System);
         }
+
         public void GroupInvite(string name)
         {
             if (GroupMembers != null && GroupMembers[0] != this)
             {
-                Connection.ReceiveChat(Connection.Language.GroupNotLeader, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.GroupNotLeader, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GroupNotLeader, MessageType.System);
                 return;
             }
 
@@ -4897,46 +5158,31 @@ namespace Server.Models
 
             if (player == null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.CannotFindPlayer, name), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.CannotFindPlayer, name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.CannotFindPlayer, name), MessageType.System);
                 return;
             }
 
             if (player.GroupMembers != null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GroupAlreadyGrouped, name), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.GroupAlreadyGrouped, name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GroupAlreadyGrouped, name), MessageType.System);
                 return;
             }
 
             if (player.GroupInvitation != null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GroupAlreadyInvited, name), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.GroupAlreadyInvited, name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GroupAlreadyInvited, name), MessageType.System);
                 return;
             }
 
             if (!player.Character.Account.AllowGroup || SEnvir.IsBlocking(Character.Account, player.Character.Account))
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GroupInviteNotAllowed, name), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.GroupInviteNotAllowed, name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GroupInviteNotAllowed, name), MessageType.System);
                 return;
             }
 
             if (player == this)
             {
-                Connection.ReceiveChat(Connection.Language.GroupSelf, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.GroupSelf, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.GroupSelf, MessageType.System);
                 return;
             }
 
@@ -4944,11 +5190,7 @@ namespace Server.Models
             {
                 if (!CurrentMap.Instance.UserRecord.TryGetValue(player.Name, out byte instanceSequence) || CurrentMap.InstanceSequence != instanceSequence)
                 {
-                    Connection.ReceiveChat(Connection.Language.InstanceNoAction, MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(con.Language.InstanceNoAction, MessageType.System);
-
+                    Connection.ReceiveChatWithObservers(con => con.Language.InstanceNoAction, MessageType.System);
                     return;
                 }
             }
@@ -4971,27 +5213,18 @@ namespace Server.Models
             }
             else if (GroupInvitation.GroupMembers[0] != GroupInvitation)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GroupAlreadyGrouped, GroupInvitation.Name), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.GroupAlreadyGrouped, GroupInvitation.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GroupAlreadyGrouped, GroupInvitation.Name), MessageType.System);
                 return;
             }
             else if (GroupInvitation.GroupMembers.Count >= Globals.GroupLimit)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.GroupMemberLimit, GroupInvitation.Name), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.GroupMemberLimit, GroupInvitation.Name), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GroupMemberLimit, GroupInvitation.Name), MessageType.System);
                 return;
             }
 
             if (CurrentMap.Instance != null)
             {
-                Connection.ReceiveChat(Connection.Language.InstanceNoAction, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.InstanceNoAction, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.InstanceNoAction, MessageType.System);
                 return;
             }
 
@@ -5387,12 +5620,16 @@ namespace Server.Models
                             if (!ItemBuffAdd(item.Info)) return;
                             break;
                         case 2: //Town Teleport
-                            if (!CurrentMap.Info.AllowTT || CurrentMap.Instance != null)
-                            {
-                                Connection.ReceiveChat(Connection.Language.CannotTownTeleport, MessageType.System);
 
-                                foreach (SConnection con in Connection.Observers)
-                                    con.ReceiveChat(con.Language.CannotTownTeleport, MessageType.System);
+                            if (CurrentMap.Instance != null && !CurrentMap.Instance.AllowTeleport)
+                            {
+                                Connection.ReceiveChatWithObservers(con => con.Language.CannotTownTeleport, MessageType.System);
+                                return;
+                            }
+
+                            if (!CurrentMap.Info.AllowTT)
+                            {
+                                Connection.ReceiveChatWithObservers(con => con.Language.CannotTownTeleport, MessageType.System);
                                 return;
                             }
 
@@ -5403,10 +5640,7 @@ namespace Server.Models
 
                             if (!CurrentMap.Info.AllowRT)
                             {
-                                Connection.ReceiveChat(Connection.Language.CannotRandomTeleport, MessageType.System);
-
-                                foreach (SConnection con in Connection.Observers)
-                                    con.ReceiveChat(con.Language.CannotRandomTeleport, MessageType.System);
+                                Connection.ReceiveChatWithObservers(con => con.Language.CannotRandomTeleport, MessageType.System);
                                 return;
                             }
 
@@ -5585,9 +5819,7 @@ namespace Server.Models
 
                                     if (!CompanionLevelLock3)
                                     {
-                                        Connection.ReceiveChat(string.Format(Connection.Language.ConnotResetCompanionSkill, item.Info.ItemName, 3), MessageType.System);
-                                        foreach (SConnection con in Connection.Observers)
-                                            con.ReceiveChat(string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 3), MessageType.System);
+                                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 3), MessageType.System);
                                         return;
                                     }
 
@@ -5606,9 +5838,7 @@ namespace Server.Models
 
                                     if (!CompanionLevelLock5)
                                     {
-                                        Connection.ReceiveChat(string.Format(Connection.Language.ConnotResetCompanionSkill, item.Info.ItemName, 5), MessageType.System);
-                                        foreach (SConnection con in Connection.Observers)
-                                            con.ReceiveChat(string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 5), MessageType.System);
+                                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 5), MessageType.System);
                                         return;
                                     }
 
@@ -5626,9 +5856,8 @@ namespace Server.Models
 
                                     if (!CompanionLevelLock7)
                                     {
-                                        Connection.ReceiveChat(string.Format(Connection.Language.ConnotResetCompanionSkill, item.Info.ItemName, 7), MessageType.System);
-                                        foreach (SConnection con in Connection.Observers)
-                                            con.ReceiveChat(string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 7), MessageType.System);
+                                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 7), MessageType.System);
+
                                         return;
                                     }
 
@@ -5646,10 +5875,7 @@ namespace Server.Models
 
                                     if (!CompanionLevelLock10)
                                     {
-                                        Connection.ReceiveChat(string.Format(Connection.Language.ConnotResetCompanionSkill, item.Info.ItemName, 10), MessageType.System);
-
-                                        foreach (SConnection con in Connection.Observers)
-                                            con.ReceiveChat(string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 10), MessageType.System);
+                                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 10), MessageType.System);
                                         return;
                                     }
 
@@ -5667,10 +5893,7 @@ namespace Server.Models
 
                                     if (!CompanionLevelLock11)
                                     {
-                                        Connection.ReceiveChat(string.Format(Connection.Language.ConnotResetCompanionSkill, item.Info.ItemName, 11), MessageType.System);
-
-                                        foreach (SConnection con in Connection.Observers)
-                                            con.ReceiveChat(string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 11), MessageType.System);
+                                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 11), MessageType.System);
                                         return;
                                     }
 
@@ -5688,10 +5911,7 @@ namespace Server.Models
 
                                     if (!CompanionLevelLock13)
                                     {
-                                        Connection.ReceiveChat(string.Format(Connection.Language.ConnotResetCompanionSkill, item.Info.ItemName, 13), MessageType.System);
-
-                                        foreach (SConnection con in Connection.Observers)
-                                            con.ReceiveChat(string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 13), MessageType.System);
+                                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 13), MessageType.System);
                                         return;
                                     }
 
@@ -5709,10 +5929,7 @@ namespace Server.Models
 
                                     if (!CompanionLevelLock15)
                                     {
-                                        Connection.ReceiveChat(string.Format(Connection.Language.ConnotResetCompanionSkill, item.Info.ItemName, 15), MessageType.System);
-
-                                        foreach (SConnection con in Connection.Observers)
-                                            con.ReceiveChat(string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 15), MessageType.System);
+                                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.ConnotResetCompanionSkill, item.Info.ItemName, 15), MessageType.System);
                                         return;
                                     }
 
@@ -5735,10 +5952,7 @@ namespace Server.Models
 
                             if (size >= Storage.Length)
                             {
-                                Connection.ReceiveChat(Connection.Language.StorageLimit, MessageType.System);
-
-                                foreach (SConnection con in Connection.Observers)
-                                    con.ReceiveChat(con.Language.StorageLimit, MessageType.System);
+                                Connection.ReceiveChatWithObservers(con => con.Language.StorageLimit, MessageType.System);
                                 return;
                             }
 
@@ -5849,13 +6063,9 @@ namespace Server.Models
                                 return;
                             }
 
-
                             if (!ExtractorLock)
                             {
                                 Connection.ReceiveChat("Extraction functions are locked, please type @ExtractorLock and try again", MessageType.System);
-
-                                foreach (SConnection con in Connection.Observers)
-                                    con.ReceiveChat("Extraction functions are locked, please type @ExtractorLock and try again", MessageType.System);
                                 return;
                             }
 
@@ -5925,9 +6135,6 @@ namespace Server.Models
                             if (!ExtractorLock)
                             {
                                 Connection.ReceiveChat("Extraction functions are locked, please type @ExtractorLock and try again", MessageType.System);
-
-                                foreach (SConnection con in Connection.Observers)
-                                    con.ReceiveChat("Extraction functions are locked, please type @ExtractorLock and try again", MessageType.System);
                                 return;
                             }
 
@@ -5975,9 +6182,6 @@ namespace Server.Models
                             if (!ExtractorLock)
                             {
                                 Connection.ReceiveChat("Extraction functions are locked, please type @ExtractorLock and try again", MessageType.System);
-
-                                foreach (SConnection con in Connection.Observers)
-                                    con.ReceiveChat("Extraction functions are locked, please type @ExtractorLock and try again", MessageType.System);
                                 return;
                             }
 
@@ -6053,9 +6257,6 @@ namespace Server.Models
                             if (!ExtractorLock)
                             {
                                 Connection.ReceiveChat("Extraction functions are locked, please type @ExtractorLock and try again", MessageType.System);
-
-                                foreach (SConnection con in Connection.Observers)
-                                    con.ReceiveChat("Extraction functions are locked, please type @ExtractorLock and try again", MessageType.System);
                                 return;
                             }
 
@@ -6119,7 +6320,7 @@ namespace Server.Models
                 case ItemType.Book:
                     if (SEnvir.Now < UseItemTime || Horse != HorseType.None) return;
 
-                    MagicInfo info = SEnvir.MagicInfoList.Binding.First(x => x.Index == item.Info.Shape);
+                    MagicInfo info = SEnvir.GetMagicInfo(item.Info.Shape);
 
                     if (info.School == MagicSchool.None) return;
 
@@ -6127,14 +6328,17 @@ namespace Server.Models
                     {
                         var magic = magicObject.Magic;
 
+                        if (magic.ItemRequired)
+                        {
+                            magic.ItemRequired = false;
+                            Enqueue(new S.NewMagic { Magic = magic.ToClientInfo() });
+                        }
+
                         if (magic.Level < 3) return;
 
                         if (magic.Level >= Globals.MagicMaxLevel)
                         {
-                            Connection.ReceiveChat(string.Format(Connection.Language.MagicMaxLevelReached, magic.Info.Name), MessageType.System);
-
-                            foreach (SConnection con in Connection.Observers)
-                                con.ReceiveChat(string.Format(con.Language.MagicMaxLevelReached, magic.Info.Name), MessageType.System);
+                            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MagicMaxLevelReached, magic.Info.Name), MessageType.System);
 
                             return;
                         }
@@ -6142,10 +6346,7 @@ namespace Server.Models
 
                     if (SEnvir.Random.Next(100) >= item.CurrentDurability)
                     {
-                        Connection.ReceiveChat(Connection.Language.LearnBookFailed, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.LearnBookFailed, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.LearnBookFailed, MessageType.System);
 
                         break;
                     }
@@ -6165,10 +6366,7 @@ namespace Server.Models
 
                             Enqueue(new S.MagicLeveled { InfoIndex = magic.Info.Index, Level = magic.Level, Experience = magic.Experience });
 
-                            Connection.ReceiveChat(string.Format(Connection.Language.LearnBook4Success, magic.Info.Name, magic.Level), MessageType.System);
-
-                            foreach (SConnection con in Connection.Observers)
-                                con.ReceiveChat(string.Format(con.Language.LearnBook4Success, magic.Info.Name, magic.Level), MessageType.System);
+                            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.LearnBook4Success, magic.Info.Name, magic.Level), MessageType.System);
 
                             RefreshStats();
                         }
@@ -6176,10 +6374,7 @@ namespace Server.Models
                         {
                             long remaining = rate - magic.Experience;
 
-                            Connection.ReceiveChat(string.Format(Connection.Language.LearnBook4Failed, remaining, magic.Level + 1), MessageType.System);
-
-                            foreach (SConnection con in Connection.Observers)
-                                con.ReceiveChat(string.Format(con.Language.LearnBook4Failed, remaining, magic.Level + 1), MessageType.System);
+                            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.LearnBook4Failed, remaining, magic.Level + 1), MessageType.System);
 
                             Enqueue(new S.MagicLeveled { InfoIndex = magic.Info.Index, Level = magic.Level, Experience = magic.Experience });
                         }
@@ -6194,10 +6389,7 @@ namespace Server.Models
 
                         Enqueue(new S.NewMagic { Magic = magic.ToClientInfo() });
 
-                        Connection.ReceiveChat(string.Format(Connection.Language.LearnBookSuccess, magic.Info.Name), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.LearnBookSuccess, magic.Info.Name), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.LearnBookSuccess, magic.Info.Name), MessageType.System);
 
                         RefreshStats();
                     }
@@ -6376,7 +6568,7 @@ namespace Server.Models
             switch (item.Info.ItemType)
             {
                 case ItemType.Book:
-                    MagicInfo magic = SEnvir.MagicInfoList.Binding.FirstOrDefault(x => x.Index == item.Info.Shape);
+                    MagicInfo magic = SEnvir.GetMagicInfo(item.Info.Shape);
                     if (magic == null) return false;
                     if (GetMagic(magic.Magic, out MagicObject magicObject) && (magicObject.Magic.Level < 3 || (item.Flags & UserItemFlags.NonRefinable) == UserItemFlags.NonRefinable)) return false;
                     return true;
@@ -6424,10 +6616,7 @@ namespace Server.Models
                 case GridType.PartsStorage:
                     if (!InSafeZone && !Character.Account.TempAdmin)
                     {
-                        Connection.ReceiveChat(Connection.Language.StorageSafeZone, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.StorageSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.StorageSafeZone, MessageType.System);
                         return;
                     }
 
@@ -6436,10 +6625,7 @@ namespace Server.Models
                 case GridType.Storage:
                     if (!InSafeZone && !Character.Account.TempAdmin)
                     {
-                        Connection.ReceiveChat(Connection.Language.StorageSafeZone, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.StorageSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.StorageSafeZone, MessageType.System);
                         return;
                     }
 
@@ -6452,13 +6638,13 @@ namespace Server.Models
 
                     if ((Character.Account.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage)
                     {
-                        Connection.ReceiveChat(Connection.Language.GuildStoragePermission, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.GuildStoragePermission, MessageType.System);
                         return;
                     }
 
-                    if (!InSafeZone && (p.ToGrid != GridType.Storage || p.ToGrid != GridType.PartsStorage))
+                    if (!InSafeZone && !(p.ToGrid == GridType.Storage || p.ToGrid == GridType.PartsStorage))
                     {
-                        Connection.ReceiveChat(Connection.Language.GuildStorageSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.GuildStorageSafeZone, MessageType.System);
                         return;
                     }
 
@@ -6497,29 +6683,25 @@ namespace Server.Models
                     toArray = Equipment;
                     break;
                 case GridType.PartsStorage:
-
                     if (!InSafeZone && !Character.Account.TempAdmin)
                     {
-                        Connection.ReceiveChat(Connection.Language.StorageSafeZone, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.StorageSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.StorageSafeZone, MessageType.System);
                         return;
                     }
+                    
+                    if (fromItem.Info.ItemEffect != ItemEffect.ItemPart) return;
 
                     toArray = PartsStorage;
 
                     break;
                 case GridType.Storage:
-
                     if (!InSafeZone && !Character.Account.TempAdmin)
                     {
-                        Connection.ReceiveChat(Connection.Language.StorageSafeZone, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.StorageSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.StorageSafeZone, MessageType.System);
                         return;
                     }
+
+                    if (fromItem.Info.ItemEffect == ItemEffect.ItemPart) return;
 
                     toArray = Storage;
 
@@ -6530,13 +6712,13 @@ namespace Server.Models
 
                     if ((Character.Account.GuildMember.Permission & GuildPermission.Storage) != GuildPermission.Storage)
                     {
-                        Connection.ReceiveChat(Connection.Language.GuildStoragePermission, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.GuildStoragePermission, MessageType.System);
                         return;
                     }
 
-                    if (!InSafeZone && p.FromGrid != GridType.Storage)
+                    if (!InSafeZone && !(p.ToGrid == GridType.Storage || p.ToGrid == GridType.PartsStorage))
                     {
-                        Connection.ReceiveChat(Connection.Language.GuildStorageSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.GuildStorageSafeZone, MessageType.System);
                         return;
                     }
 
@@ -6640,10 +6822,7 @@ namespace Server.Models
 
                 if (Companion.BagWeight + weight > Companion.Stats[Stat.CompanionBagWeight])
                 {
-                    Connection.ReceiveChat(Connection.Language.CompanionNoRoom, MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(con.Language.CompanionNoRoom, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.CompanionNoRoom, MessageType.System);
                     return;
                 }
             }
@@ -6656,10 +6835,7 @@ namespace Server.Models
 
                 if (Companion.BagWeight + weight > Companion.Stats[Stat.CompanionBagWeight])
                 {
-                    Connection.ReceiveChat(Connection.Language.CompanionNoRoom, MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(con.Language.CompanionNoRoom, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.CompanionNoRoom, MessageType.System);
                     return;
                 }
             }
@@ -7026,7 +7202,13 @@ namespace Server.Models
                 array[i] = null;
             }
 
+            int index = 0;
             int slot = 0;
+
+            if (p.Grid == GridType.PartsStorage)
+            {
+                slot = Globals.PartsStorageOffset;
+            }
 
             for (int i = 0; i < sorted.Length; i++)
             {
@@ -7039,7 +7221,7 @@ namespace Server.Models
 
                     item.Count -= item.Info.StackSize;
 
-                    array[slot] = newItem;
+                    array[index] = newItem;
                     newItem.Slot = slot;
 
                     switch (p.Grid)
@@ -7055,12 +7237,14 @@ namespace Server.Models
                             break;
                     }
 
+                    index++;
                     slot++;
                 }
 
-                array[slot] = item;
+                array[index] = item;
                 item.Slot = slot;
 
+                index++;
                 slot++;
             }
 
@@ -7496,7 +7680,7 @@ namespace Server.Models
 
             if (p.LinkIndex > 0)
                 info = SEnvir.ItemInfoList.Binding.FirstOrDefault(x => x.Index == p.LinkIndex);
-            else if (p.Slot > 0)
+            else if (p.LinkItemIndex > 0)
                 item = Inventory.FirstOrDefault(x => x?.Index == p.LinkItemIndex);
 
             foreach (CharacterBeltLink link in Character.BeltLinks)
@@ -8193,17 +8377,13 @@ namespace Server.Models
         }
         public void FortuneCheck(int index)
         {
-            if (SEnvir.FortuneCheckerInfo == null) return;
-
+            if (!Config.EnableFortune || SEnvir.FortuneCheckerInfo == null) return;
 
             long count = GetItemCount(SEnvir.FortuneCheckerInfo);
 
             if (count == 0)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.NeedItem, SEnvir.FortuneCheckerInfo.ItemName), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.NeedItem, SEnvir.FortuneCheckerInfo.ItemName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NeedItem, SEnvir.FortuneCheckerInfo.ItemName), MessageType.System);
                 return;
             }
 
@@ -8258,23 +8438,9 @@ namespace Server.Models
 
             if (CurrentMap == null) return;
 
-            Stats stats = new Stats();
-
-            stats[Stat.MonsterHealth] = CurrentMap.Info.MonsterHealth;
-            stats[Stat.MonsterDamage] = CurrentMap.Info.MonsterDamage;
-            stats[Stat.MonsterExperience] = CurrentMap.Info.ExperienceRate;
-            stats[Stat.MonsterDrop] = CurrentMap.Info.DropRate;
-            stats[Stat.MonsterGold] = CurrentMap.Info.GoldRate;
-
-            stats[Stat.MaxMonsterHealth] = CurrentMap.Info.MaxMonsterHealth;
-            stats[Stat.MaxMonsterDamage] = CurrentMap.Info.MaxMonsterDamage;
-            stats[Stat.MaxMonsterExperience] = CurrentMap.Info.MaxExperienceRate;
-            stats[Stat.MaxMonsterDrop] = CurrentMap.Info.MaxDropRate;
-            stats[Stat.MaxMonsterGold] = CurrentMap.Info.MaxGoldRate;
-
-            if (stats.Count != 0)
+            if (CurrentMap.Info.Stats.Count != 0)
             {
-                BuffAdd(BuffType.MapEffect, TimeSpan.MaxValue, stats, false, false, TimeSpan.Zero);
+                BuffAdd(BuffType.MapEffect, TimeSpan.MaxValue, CurrentMap.Info.Stats, false, false, TimeSpan.Zero);
             }
 
             if (CurrentMap.Instance != null && CurrentMap.Instance.Stats.Count != 0)
@@ -8305,6 +8471,8 @@ namespace Server.Models
             BuffRemove(BuffType.Observable);
 
             if (!Character.Observable) return;
+
+            if (!Config.AllowObservation) return;
 
             Stats stats = new Stats();
 
@@ -8635,18 +8803,12 @@ namespace Server.Models
         {
             if (TradePartner != null)
             {
-                Connection.ReceiveChat(Connection.Language.TradeAlreadyTrading, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeAlreadyTrading, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradeAlreadyTrading, MessageType.System);
                 return;
             }
             if (TradePartnerRequest != null)
             {
-                Connection.ReceiveChat(Connection.Language.TradeAlreadyHaveRequest, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeAlreadyHaveRequest, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradeAlreadyHaveRequest, MessageType.System);
                 return;
             }
 
@@ -8664,60 +8826,41 @@ namespace Server.Models
 
             if (player == null || player.Direction != Functions.ShiftDirection(Direction, 4))
             {
-                Connection.ReceiveChat(Connection.Language.TradeNeedFace, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeNeedFace, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradeNeedFace, MessageType.System);
                 return;
             }
 
             if (SEnvir.IsBlocking(Character.Account, player.Character.Account))
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.TradeTargetNotAllowed, player.Character.CharacterName), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.TradeTargetNotAllowed, player.Character.CharacterName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeTargetNotAllowed, player.Character.CharacterName), MessageType.System);
                 return;
             }
 
             if (player.TradePartner != null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.TradeTargetAlreadyTrading, player.Character.CharacterName), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.TradeTargetAlreadyTrading, player.Character.CharacterName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeTargetAlreadyTrading, player.Character.CharacterName), MessageType.System);
                 return;
             }
 
             if (player.TradePartnerRequest != null)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.TradeTargetAlreadyHaveRequest, player.Character.CharacterName), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.TradeTargetAlreadyHaveRequest, player.Character.CharacterName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeTargetAlreadyHaveRequest, player.Character.CharacterName), MessageType.System);
                 return;
             }
 
 
             if (!player.Character.Account.AllowTrade)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.TradeTargetNotAllowed, player.Character.CharacterName), MessageType.System);
-                player.Connection.ReceiveChat(string.Format(player.Connection.Language.TradeNotAllowed, Character.CharacterName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeTargetNotAllowed, player.Character.CharacterName), MessageType.System);
+                player.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeNotAllowed, Character.CharacterName), MessageType.System);
 
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.TradeTargetNotAllowed, player.Character.CharacterName), MessageType.System);
-
-                foreach (SConnection con in player.Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.TradeNotAllowed, Character.CharacterName), MessageType.System);
                 return;
             }
 
             if (player.Dead || Dead)
             {
-                Connection.ReceiveChat(Connection.Language.TradeTargetDead, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradeTargetDead, MessageType.System);
 
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeTargetDead, MessageType.System);
                 return;
             }
 
@@ -8725,10 +8868,7 @@ namespace Server.Models
             player.TradePartnerRequest = this;
             player.Enqueue(new S.TradeRequest { Name = Name, ObserverPacket = false });
 
-            Connection.ReceiveChat(string.Format(Connection.Language.TradeRequested, player.Character.CharacterName), MessageType.System);
-
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(string.Format(con.Language.TradeRequested, player.Character.CharacterName), MessageType.System);
+            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeRequested, player.Character.CharacterName), MessageType.System);
         }
         public void TradeAccept()
         {
@@ -8772,10 +8912,7 @@ namespace Server.Models
                 case GridType.PartsStorage:
                     if (!InSafeZone && !Character.Account.TempAdmin)
                     {
-                        Connection.ReceiveChat(Connection.Language.StorageSafeZone, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.StorageSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.StorageSafeZone, MessageType.System);
 
                         return;
                     }
@@ -8785,10 +8922,7 @@ namespace Server.Models
                 case GridType.Storage:
                     if (!InSafeZone && !Character.Account.TempAdmin)
                     {
-                        Connection.ReceiveChat(Connection.Language.StorageSafeZone, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.StorageSafeZone, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.StorageSafeZone, MessageType.System);
 
                         return;
                     }
@@ -8867,14 +9001,8 @@ namespace Server.Models
 
             if (!TradePartner.TradeConfirmed)
             {
-                Connection.ReceiveChat(Connection.Language.TradeWaiting, MessageType.System);
-                TradePartner.Connection.ReceiveChat(TradePartner.Connection.Language.TradePartnerWaiting, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeWaiting, MessageType.System);
-
-                foreach (SConnection con in TradePartner.Connection.Observers)
-                    con.ReceiveChat(con.Language.TradePartnerWaiting, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradeWaiting, MessageType.System);
+                TradePartner.Connection.ReceiveChatWithObservers(con => con.Language.TradePartnerWaiting, MessageType.System);
 
                 return;
             }
@@ -8884,14 +9012,9 @@ namespace Server.Models
 
             if (gold < 0)
             {
-                Connection.ReceiveChat(Connection.Language.TradeNoGold, MessageType.System);
-                TradePartner.Connection.ReceiveChat(TradePartner.Connection.Language.TradePartnerNoGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradeNoGold, MessageType.System);
+                TradePartner.Connection.ReceiveChatWithObservers(con => con.Language.TradePartnerNoGold, MessageType.System);
 
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeNoGold, MessageType.System);
-
-                foreach (SConnection con in TradePartner.Connection.Observers)
-                    con.ReceiveChat(con.Language.TradePartnerNoGold, MessageType.System);
                 TradeClose();
                 return;
             }
@@ -8902,14 +9025,8 @@ namespace Server.Models
 
             if (gold < 0)
             {
-                Connection.ReceiveChat(Connection.Language.TradePartnerNoGold, MessageType.System);
-                TradePartner.Connection.ReceiveChat(TradePartner.Connection.Language.TradeNoGold, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradePartnerNoGold, MessageType.System);
-
-                foreach (SConnection con in TradePartner.Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeNoGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradePartnerNoGold, MessageType.System);
+                TradePartner.Connection.ReceiveChatWithObservers(con => con.Language.TradeNoGold, MessageType.System);
 
                 TradeClose();
                 return;
@@ -8937,14 +9054,8 @@ namespace Server.Models
                     case GridType.CompanionInventory:
                         if (Companion == null)
                         {
-                            Connection.ReceiveChat(Connection.Language.TradeFailedItemsChanged, MessageType.System);
-                            TradePartner.Connection.ReceiveChat(string.Format(TradePartner.Connection.Language.TradeFailedPartnerItemsChanged, Name), MessageType.System);
-
-                            foreach (SConnection con in Connection.Observers)
-                                con.ReceiveChat(con.Language.TradeFailedItemsChanged, MessageType.System);
-
-                            foreach (SConnection con in TradePartner.Connection.Observers)
-                                con.ReceiveChat(string.Format(con.Language.TradeFailedPartnerItemsChanged, Name), MessageType.System);
+                            Connection.ReceiveChatWithObservers(con => con.Language.TradeFailedItemsChanged, MessageType.System);
+                            TradePartner.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeFailedPartnerItemsChanged, Name), MessageType.System);
 
                             TradeClose();
                             return;
@@ -8959,14 +9070,8 @@ namespace Server.Models
 
                 if (fromArray[pair.Value.Slot] != pair.Key || pair.Key.Count < pair.Value.Count)
                 {
-                    Connection.ReceiveChat(Connection.Language.TradeFailedItemsChanged, MessageType.System);
-                    TradePartner.Connection.ReceiveChat(string.Format(TradePartner.Connection.Language.TradeFailedPartnerItemsChanged, Name), MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(con.Language.TradeFailedItemsChanged, MessageType.System);
-
-                    foreach (SConnection con in TradePartner.Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.TradeFailedPartnerItemsChanged, Name), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.TradeFailedItemsChanged, MessageType.System);
+                    TradePartner.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeFailedPartnerItemsChanged, Name), MessageType.System);
 
                     TradeClose();
                     return;
@@ -8999,14 +9104,8 @@ namespace Server.Models
 
             if (!TradePartner.CanGainItems(false, checks.ToArray()))
             {
-                Connection.ReceiveChat(Connection.Language.TradeWaiting, MessageType.System);
-                TradePartner.Connection.ReceiveChat(TradePartner.Connection.Language.TradeNotEnoughSpace, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeWaiting, MessageType.System);
-
-                foreach (SConnection con in TradePartner.Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeNotEnoughSpace, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradeWaiting, MessageType.System);
+                TradePartner.Connection.ReceiveChatWithObservers(con => con.Language.TradeNotEnoughSpace, MessageType.System);
 
                 TradePartner.TradeConfirmed = false;
                 TradePartner.Enqueue(new S.TradeUnlock());
@@ -9035,14 +9134,9 @@ namespace Server.Models
                     case GridType.CompanionInventory:
                         if (TradePartner.Companion == null)
                         {
-                            Connection.ReceiveChat(string.Format(Connection.Language.TradeFailedPartnerItemsChanged, TradePartner.Name), MessageType.System);
-                            TradePartner.Connection.ReceiveChat(TradePartner.Connection.Language.TradeFailedItemsChanged, MessageType.System);
+                            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeFailedPartnerItemsChanged, TradePartner.Name), MessageType.System);
+                            TradePartner.Connection.ReceiveChatWithObservers(con => con.Language.TradeFailedItemsChanged, MessageType.System);
 
-                            foreach (SConnection con in Connection.Observers)
-                                con.ReceiveChat(string.Format(con.Language.TradeFailedPartnerItemsChanged, TradePartner.Name), MessageType.System);
-
-                            foreach (SConnection con in TradePartner.Connection.Observers)
-                                con.ReceiveChat(con.Language.TradeFailedItemsChanged, MessageType.System);
                             TradeClose();
                             return;
                         }
@@ -9057,15 +9151,8 @@ namespace Server.Models
 
                 if (fromArray[pair.Value.Slot] != pair.Key || pair.Key.Count < pair.Value.Count)
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.TradeFailedPartnerItemsChanged, TradePartner.Name), MessageType.System);
-                    TradePartner.Connection.ReceiveChat(TradePartner.Connection.Language.TradeFailedItemsChanged, MessageType.System);
-
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.TradeFailedPartnerItemsChanged, TradePartner.Name), MessageType.System);
-
-                    foreach (SConnection con in TradePartner.Connection.Observers)
-                        con.ReceiveChat(con.Language.TradeFailedItemsChanged, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.TradeFailedPartnerItemsChanged, TradePartner.Name), MessageType.System);
+                    TradePartner.Connection.ReceiveChatWithObservers(con => con.Language.TradeFailedItemsChanged, MessageType.System);
 
                     TradeClose();
                     return;
@@ -9097,14 +9184,8 @@ namespace Server.Models
 
             if (!CanGainItems(false, checks.ToArray()))
             {
-                Connection.ReceiveChat(Connection.Language.TradeNotEnoughSpace, MessageType.System);
-                TradePartner.Connection.ReceiveChat(TradePartner.Connection.Language.TradeWaiting, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeNotEnoughSpace, MessageType.System);
-
-                foreach (SConnection con in TradePartner.Connection.Observers)
-                    con.ReceiveChat(con.Language.TradeWaiting, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.TradeNotEnoughSpace, MessageType.System);
+                TradePartner.Connection.ReceiveChatWithObservers(con => con.Language.TradeWaiting, MessageType.System);
 
                 TradeConfirmed = false;
                 Enqueue(new S.TradeUnlock());
@@ -9211,15 +9292,8 @@ namespace Server.Models
             TradePartner.Gold.Amount += TradeGold - TradePartner.TradeGold;
             TradePartner.GoldChanged();
 
-
-            Connection.ReceiveChat(Connection.Language.TradeComplete, MessageType.System);
-            TradePartner.Connection.ReceiveChat(TradePartner.Connection.Language.TradeComplete, MessageType.System);
-
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(con.Language.TradeComplete, MessageType.System);
-
-            foreach (SConnection con in TradePartner.Connection.Observers)
-                con.ReceiveChat(con.Language.TradeComplete, MessageType.System);
+            Connection.ReceiveChatWithObservers(con => con.Language.TradeComplete, MessageType.System);
+            TradePartner.Connection.ReceiveChatWithObservers(con => con.Language.TradeComplete, MessageType.System);
 
             TradeClose();
         }
@@ -9298,7 +9372,7 @@ namespace Server.Models
 
                 if (p.GuildFunds && currency.Type != CurrencyType.Gold)
                 {
-                    Connection.ReceiveChat(Connection.Language.NPCFundsCurrency, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.NPCFundsCurrency, MessageType.System);
                     return;
                 }
 
@@ -9306,18 +9380,18 @@ namespace Server.Models
                 {
                     if (Character.Account.GuildMember == null)
                     {
-                        Connection.ReceiveChat(Connection.Language.NPCFundsGuild, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.NPCFundsGuild, MessageType.System);
                         return;
                     }
                     if ((Character.Account.GuildMember.Permission & GuildPermission.FundsMerchant) != GuildPermission.FundsMerchant)
                     {
-                        Connection.ReceiveChat(Connection.Language.NPCFundsPermission, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.NPCFundsPermission, MessageType.System);
                         return;
                     }
 
                     if (cost > Character.Account.GuildMember.Guild.GuildFunds)
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.NPCFundsCost, Character.Account.GuildMember.Guild.GuildFunds - cost), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCFundsCost, cost - Character.Account.GuildMember.Guild.GuildFunds), MessageType.System);
                         return;
                     }
                 }
@@ -9325,10 +9399,8 @@ namespace Server.Models
                 {
                     if (cost > amount)
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.NPCCost, amount - cost), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCCost, amount - cost), MessageType.System);
 
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.NPCCost, amount - cost), MessageType.System);
                         return;
                     }
                 }
@@ -9353,10 +9425,8 @@ namespace Server.Models
 
                 if (!CanGainItems(true, check))
                 {
-                    Connection.ReceiveChat(Connection.Language.NPCNoRoom, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.NPCNoRoom, MessageType.System);
 
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(con.Language.NPCNoRoom, MessageType.System);
                     return;
                 }
 
@@ -9389,7 +9459,7 @@ namespace Server.Models
             S.ItemsChanged p = new S.ItemsChanged { Links = links };
             Enqueue(p);
 
-            if (Dead || NPC == null || NPCPage == null || NPCPage.DialogType != NPCDialogType.BuySell) return;
+            if (Dead || NPC == null || NPCPage == null || NPCPage.DialogType != NPCDialogType.BuySell || NPCPage.Types.Count == 0) return;
 
             var currency = NPCPage.Currency ?? SEnvir.CurrencyInfoList.Binding.First(x => x.Type == CurrencyType.Gold);
 
@@ -9425,6 +9495,8 @@ namespace Server.Models
                 if ((item.Flags & UserItemFlags.Marriage) == UserItemFlags.Marriage) return;
                 if ((item.Flags & UserItemFlags.Worthless) == UserItemFlags.Worthless) return;
 
+                if (!NPCPage.Types.Any(x => x.ItemType == item.Info.ItemType)) return;
+
                 var price = (long)(item.Price(link.Count) * currency.ExchangeRate);
 
                 count += link.Count;
@@ -9433,10 +9505,7 @@ namespace Server.Models
 
             if (amount < 0)
             {
-                Connection.ReceiveChat(Connection.Language.NPCSellWorthless, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCSellWorthless, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCSellWorthless, MessageType.System);
 
                 return;
             }
@@ -9477,10 +9546,7 @@ namespace Server.Models
                 RefreshWeight();
             }
 
-            Connection.ReceiveChat(string.Format(Connection.Language.NPCSellResult, count, amount, currency.Name), MessageType.System);
-
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(string.Format(con.Language.NPCSellResult, count, amount, currency.Name), MessageType.System);
+            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCSellResult, count, amount, currency.Name), MessageType.System);
 
             p.Success = true;
             userCurrency.Amount += amount;
@@ -9543,10 +9609,7 @@ namespace Server.Models
 
             if (cost > Gold.Amount)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.FragmentCost, Gold.Amount - cost), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.FragmentCost, Gold.Amount - cost), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.FragmentCost, Gold.Amount - cost), MessageType.System);
                 return;
             }
 
@@ -9561,10 +9624,7 @@ namespace Server.Models
 
             if (!CanGainItems(false, checks.ToArray()))
             {
-                Connection.ReceiveChat(Connection.Language.FragmentSpace, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.FragmentSpace, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.FragmentSpace, MessageType.System);
                 return;
             }
 
@@ -9609,10 +9669,7 @@ namespace Server.Models
                 RefreshWeight();
             }
 
-            Connection.ReceiveChat(string.Format(Connection.Language.FragmentResult, itemCount, cost), MessageType.System);
-
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(string.Format(con.Language.FragmentResult, itemCount, cost), MessageType.System);
+            Connection.ReceiveChatWithObservers(con => string.Format(con.Language.FragmentResult, itemCount, cost), MessageType.System);
 
             p.Success = true;
             Gold.Amount -= cost;
@@ -9710,10 +9767,7 @@ namespace Server.Models
 
                 if (Gold.Amount < cost)
                 {
-                    Connection.ReceiveChat(Connection.Language.AccessoryLevelCost, MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(con.Language.AccessoryLevelCost, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.AccessoryLevelCost, MessageType.System);
                     continue;
                 }
 
@@ -9764,10 +9818,7 @@ namespace Server.Models
             {
                 if ((targetItem.Flags & UserItemFlags.Refinable) == UserItemFlags.Refinable)
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.AccessoryLeveled, targetItem.Info.ItemName), MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.AccessoryLeveled, targetItem.Info.ItemName), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.AccessoryLeveled, targetItem.Info.ItemName), MessageType.System);
                 }
 
                 Companion?.RefreshWeight();
@@ -9948,7 +9999,7 @@ namespace Server.Models
                 default:
                     Character.Account.Banned = true;
                     Character.Account.BanReason = "Attempted to Exploit refine, Accessory Refine Type.";
-                    Character.Account.ExpiryDate = SEnvir.Now.AddYears(10);
+                    Character.Account.BanExpiry = SEnvir.Now.AddYears(10);
                     return;
             }
 
@@ -10000,7 +10051,7 @@ namespace Server.Models
 
             if (Globals.AccessoryResetCost > Gold.Amount)
             {
-                Connection.ReceiveChat(Connection.Language.NPCRefinementGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefinementGold, MessageType.System);
                 return;
             }
 
@@ -10369,23 +10420,17 @@ namespace Server.Models
                     default:
                         Character.Account.Banned = true;
                         Character.Account.BanReason = "Attempted to Exploit refine, Accessory Refine Type.";
-                        Character.Account.ExpiryDate = SEnvir.Now.AddYears(10);
+                        Character.Account.BanExpiry = SEnvir.Now.AddYears(10);
                         return;
                 }
                 targetItem.StatsChanged();
-                Connection.ReceiveChat(string.Format(Connection.Language.AccessoryRefineSuccess, targetItem.Info.ItemName, p.RefineType, amount), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.AccessoryRefineSuccess, targetItem.Info.ItemName, p.RefineType, amount), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.AccessoryRefineSuccess, targetItem.Info.ItemName, p.RefineType, amount), MessageType.System);
                 RefreshStats();
             }
             #endregion
             else
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.AccessoryRefineFailed, targetItem.Info.ItemName), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.AccessoryRefineFailed, targetItem.Info.ItemName), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.AccessoryRefineFailed, targetItem.Info.ItemName), MessageType.System);
                 targetArray[targetItem.Slot] = null;
                 result.Links.Add(p.Target);
                 RemoveItem(targetItem);
@@ -10462,35 +10507,24 @@ namespace Server.Models
                     case ItemType.Shield:
                         break;
                     default:
-                        Connection.ReceiveChat(string.Format(Connection.Language.RepairFail, item.Info.ItemName), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.RepairFail, item.Info.ItemName), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.RepairFail, item.Info.ItemName), MessageType.System);
                         return;
                 }
 
                 if (item.CurrentDurability >= item.MaxDurability)
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.RepairFailRepaired, item.Info.ItemName), MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.RepairFailRepaired, item.Info.ItemName), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.RepairFailRepaired, item.Info.ItemName), MessageType.System);
                     return;
                 }
                 if (NPCPage.Types.FirstOrDefault(x => x.ItemType == item.Info.ItemType) == null)
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.RepairFailLocation, item.Info.ItemName), MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.RepairFailLocation, item.Info.ItemName), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.RepairFailLocation, item.Info.ItemName), MessageType.System);
                     return;
                 }
                 if (p.Special && SEnvir.Now < item.SpecialRepairCoolDown)
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.RepairFailCooldown, item.Info.ItemName, Functions.ToString(item.SpecialRepairCoolDown - SEnvir.Now, false)), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.RepairFailCooldown, item.Info.ItemName, Functions.ToString(item.SpecialRepairCoolDown - SEnvir.Now, false)), MessageType.System);
 
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.RepairFailCooldown, item.Info.ItemName, Functions.ToString(item.SpecialRepairCoolDown - SEnvir.Now, false)), MessageType.System);
                     return;
                 }
 
@@ -10499,23 +10533,22 @@ namespace Server.Models
                 cost += array[link.Slot].RepairCost(p.Special);
             }
 
-
             if (p.GuildFunds)
             {
                 if (Character.Account.GuildMember == null)
                 {
-                    Connection.ReceiveChat(Connection.Language.NPCRepairGuild, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.NPCRepairGuild, MessageType.System);
                     return;
                 }
                 if ((Character.Account.GuildMember.Permission & GuildPermission.FundsRepair) != GuildPermission.FundsRepair)
                 {
-                    Connection.ReceiveChat(Connection.Language.NPCRepairPermission, MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => con.Language.NPCRepairPermission, MessageType.System);
                     return;
                 }
 
                 if (cost > Character.Account.GuildMember.Guild.GuildFunds)
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.NPCRepairGuildCost, Character.Account.GuildMember.Guild.GuildFunds - cost), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCRepairGuildCost, cost - Character.Account.GuildMember.Guild.GuildFunds), MessageType.System);
                     return;
                 }
             }
@@ -10523,10 +10556,7 @@ namespace Server.Models
             {
                 if (cost > Gold.Amount)
                 {
-                    Connection.ReceiveChat(string.Format(Connection.Language.NPCRepairCost, Gold.Amount - cost), MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.NPCRepairCost, Gold.Amount - cost), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCRepairCost, Gold.Amount - cost), MessageType.System);
                     return;
                 }
             }
@@ -10575,9 +10605,6 @@ namespace Server.Models
             }
 
             Connection.ReceiveChat(string.Format(p.Special ? Connection.Language.NPCRepairSpecialResult : Connection.Language.NPCRepairResult, count, cost), MessageType.System);
-
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(string.Format(p.Special ? con.Language.NPCRepairSpecialResult : con.Language.NPCRepairResult, count, cost), MessageType.System);
 
             result.Success = true;
 
@@ -10629,20 +10656,14 @@ namespace Server.Models
 
             if (p.Gold > Gold.Amount)
             {
-                Connection.ReceiveChat(Connection.Language.NPCRefinementGold, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCRefinementGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefinementGold, MessageType.System);
                 return;
             }
 
             ItemCheck check = new ItemCheck(SEnvir.RefinementStoneInfo, 1, UserItemFlags.None, TimeSpan.Zero);
             if (!CanGainItems(false, check))
             {
-                Connection.ReceiveChat(Connection.Language.NPCRefinementStoneFailedRoom, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCRefinementStoneFailedRoom, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefinementStoneFailedRoom, MessageType.System);
                 return;
             }
 
@@ -10944,10 +10965,7 @@ namespace Server.Models
 
             if (SEnvir.Random.Next(100) >= chance)
             {
-                Connection.ReceiveChat(Connection.Language.NPCRefinementStoneFailed, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCRefinementStoneFailed, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefinementStoneFailed, MessageType.System);
                 return;
             }
 
@@ -10978,7 +10996,7 @@ namespace Server.Models
                 default:
                     Character.Account.Banned = true;
                     Character.Account.BanReason = "Attempted to Exploit refine, Weapon Refine Quality.";
-                    Character.Account.ExpiryDate = SEnvir.Now.AddYears(10);
+                    Character.Account.BanExpiry = SEnvir.Now.AddYears(10);
                     return;
             }
 
@@ -10998,7 +11016,7 @@ namespace Server.Models
                 default:
                     Character.Account.Banned = true;
                     Character.Account.BanReason = "Attempted to Exploit refine, Weapon Refine Type.";
-                    Character.Account.ExpiryDate = SEnvir.Now.AddYears(10);
+                    Character.Account.BanExpiry = SEnvir.Now.AddYears(10);
                     return;
             }
 
@@ -11020,10 +11038,7 @@ namespace Server.Models
 
             if (Gold.Amount < RefineCost)
             {
-                Connection.ReceiveChat(Connection.Language.NPCRefinementGold, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCRefinementGold, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefinementGold, MessageType.System);
                 return;
             }
 
@@ -11303,10 +11318,7 @@ namespace Server.Models
 
             if (SEnvir.Now < info.RetrieveTime && !Character.Account.TempAdmin)
             {
-                Connection.ReceiveChat(Connection.Language.NPCRefineNotReady, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCRefineNotReady, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefineNotReady, MessageType.System);
                 return;
             }
 
@@ -11314,10 +11326,7 @@ namespace Server.Models
 
             if (!CanGainItems(false, check))
             {
-                Connection.ReceiveChat(Connection.Language.NPCRefineNoRoom, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCRefineNoRoom, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefineNoRoom, MessageType.System);
                 return;
             }
 
@@ -11424,17 +11433,11 @@ namespace Server.Models
                 }
                 weapon.StatsChanged();
 
-                Connection.ReceiveChat(Connection.Language.NPCRefineSuccess, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCRefineSuccess, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefineSuccess, MessageType.System);
             }
             else
             {
-                Connection.ReceiveChat(Connection.Language.NPCRefineFailed, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.NPCRefineFailed, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.NPCRefineFailed, MessageType.System);
             }
 
             weapon.Flags &= ~UserItemFlags.Refinable;
@@ -11529,10 +11532,8 @@ namespace Server.Models
 
             if (!CanGainItems(false, checks.ToArray()))
             {
-                Connection.ReceiveChat(Connection.Language.FameNeedSpace, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.FameNeedSpace, MessageType.System);
 
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.FameNeedSpace, MessageType.System);
                 return;
             }
 
@@ -11596,7 +11597,7 @@ namespace Server.Models
                 default:
                     Character.Account.Banned = true;
                     Character.Account.BanReason = "Attempted to Exploit Master refine, Weapon Refine Type.";
-                    Character.Account.ExpiryDate = SEnvir.Now.AddYears(10);
+                    Character.Account.BanExpiry = SEnvir.Now.AddYears(10);
                     return;
             }
 
@@ -12048,9 +12049,6 @@ namespace Server.Models
 
             Connection.ReceiveChat(sucess ? Connection.Language.NPCRefineSuccess : Connection.Language.NPCRefineFailed, MessageType.System);
 
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(sucess ? con.Language.NPCRefineSuccess : con.Language.NPCRefineFailed, MessageType.System);
-
             weapon.StatsChanged();
             SendShapeUpdate();
             RefreshStats();
@@ -12069,10 +12067,7 @@ namespace Server.Models
             weapon.AddStat(stat, amount, StatSource.Refine);
 
 
-            Connection.ReceiveChat(Connection.Language.NPCRefineSuccess, MessageType.System);
-
-            foreach (SConnection con in Connection.Observers)
-                con.ReceiveChat(con.Language.NPCRefineSuccess, MessageType.System);
+            Connection.ReceiveChatWithObservers(con => con.Language.NPCRefineSuccess, MessageType.System);
 
             weapon.StatsChanged();
             SendShapeUpdate();
@@ -12109,10 +12104,7 @@ namespace Server.Models
 
             if (Gold.Amount < Globals.MasterRefineEvaluateCost)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.NPCMasterRefineGold, Globals.MasterRefineEvaluateCost), MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(string.Format(con.Language.NPCMasterRefineGold, Globals.MasterRefineEvaluateCost), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCMasterRefineGold, Globals.MasterRefineEvaluateCost), MessageType.System);
                 return;
             }
 
@@ -12295,7 +12287,6 @@ namespace Server.Models
             switch (p.RefineType)
             {
                 case RefineType.DC:
-
                     foreach (UserItemStat stat in weapon.AddedStats)
                     {
                         if (stat.Stat != Stat.MaxDC || stat.StatSource != StatSource.Refine) continue;
@@ -12304,10 +12295,7 @@ namespace Server.Models
                         break;
                     }
 
-                    Connection.ReceiveChat(string.Format(Connection.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
                     break;
                 case RefineType.SpellPower:
                     foreach (UserItemStat stat in weapon.AddedStats)
@@ -12318,10 +12306,7 @@ namespace Server.Models
 
                         statValue = Math.Max(statValue, stat.Amount);
                     }
-                    Connection.ReceiveChat(string.Format(Connection.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
                     break;
                 case RefineType.Fire:
                 case RefineType.Ice:
@@ -12334,10 +12319,7 @@ namespace Server.Models
                     weapon.StatsChanged();
 
                     sucess = SEnvir.Random.Next(100) >= Math.Min(maxChance, 80 - statValue * 4 + fragmentCount * 2);
-                    Connection.ReceiveChat(string.Format(Connection.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
-
-                    foreach (SConnection con in Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
+                    Connection.ReceiveChatWithObservers(con => string.Format(con.Language.NPCMasterRefineChance, Math.Min(maxChance, Math.Max(80 - statValue * 4 + fragmentCount * fragmentRate, 0))), MessageType.System);
                     break;
             }
 
@@ -12864,10 +12846,7 @@ namespace Server.Models
 
                                 if (ob.Drops.Count == 0) ob.Drops = null;
                                 ob.HarvestChanged();
-                                Connection.ReceiveChat(Connection.Language.HarvestNothing, MessageType.System);
-
-                                foreach (SConnection con in Connection.Observers)
-                                    con.ReceiveChat(con.Language.HarvestNothing, MessageType.System);
+                                Connection.ReceiveChatWithObservers(con => con.Language.HarvestNothing, MessageType.System);
                                 continue;
                             }
 
@@ -12893,10 +12872,8 @@ namespace Server.Models
                                 continue;
                             }
 
-                            Connection.ReceiveChat(Connection.Language.HarvestCarry, MessageType.System);
+                            Connection.ReceiveChatWithObservers(con => con.Language.HarvestCarry, MessageType.System);
 
-                            foreach (SConnection con in Connection.Observers)
-                                con.ReceiveChat(con.Language.HarvestCarry, MessageType.System);
                             continue;
                         }
                     }
@@ -12905,11 +12882,7 @@ namespace Server.Models
 
             if (send)
             {
-                Connection.ReceiveChat(Connection.Language.HarvestOwner, MessageType.System);
-
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.HarvestOwner, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.HarvestOwner, MessageType.System);
             }
         }
         public void Mount()
@@ -12929,10 +12902,7 @@ namespace Server.Models
 
             if (Dead)
             {
-                Connection.ReceiveChat(Connection.Language.HorseDead, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.HorseDead, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.HorseDead, MessageType.System);
 
                 Enqueue(new S.MountFailed { Horse = Horse });
                 return;
@@ -12940,10 +12910,7 @@ namespace Server.Models
 
             if (Character.Account.Horse == HorseType.None)
             {
-                Connection.ReceiveChat(Connection.Language.HorseOwner, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.HorseOwner, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.HorseOwner, MessageType.System);
 
                 Enqueue(new S.MountFailed { Horse = Horse });
                 return;
@@ -12951,10 +12918,7 @@ namespace Server.Models
 
             if (!CurrentMap.Info.CanHorse)
             {
-                Connection.ReceiveChat(Connection.Language.HorseMap, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.HorseMap, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.HorseMap, MessageType.System);
 
                 Enqueue(new S.MountFailed { Horse = Horse });
                 return;
@@ -13069,9 +13033,6 @@ namespace Server.Models
                         state = FishingState.Reel;
 
                         Connection.ReceiveChat("Not enough bait.", MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat("Not enough bait.", MessageType.System);
                     }
                 }
 
@@ -13119,9 +13080,6 @@ namespace Server.Models
                             perfectCatch = true;
 
                             Connection.ReceiveChat("Perfect Catch!", MessageType.System);
-
-                            foreach (SConnection con in Connection.Observers)
-                                con.ReceiveChat("Perfect Catch!", MessageType.System);
                         }
 
                         var zone = Functions.FishingZone(SEnvir.FishingInfoList, CurrentMap.Info, CurrentMap.Width, CurrentMap.Height, floatLocation);
@@ -13296,6 +13254,8 @@ namespace Server.Models
             ActionTime = SEnvir.Now + Globals.MoveTime;
             MoveTime = SEnvir.Now + Globals.MoveTime;
 
+            var previousCell = CurrentCell;
+
             PreventSpellCheck = true;
             CurrentCell = cell.GetMovement(this);
             PreventSpellCheck = false;
@@ -13314,6 +13274,7 @@ namespace Server.Models
             Broadcast(new S.ObjectMove { ObjectID = ObjectID, Direction = direction, Location = CurrentLocation, Slow = slow, Distance = distance });
             CheckSpellObjects();
         }
+
         public void Attack(MirDirection direction, MagicType attackMagic)
         {
             if (SEnvir.Now < ActionTime || SEnvir.Now < AttackTime)
@@ -13347,6 +13308,9 @@ namespace Server.Models
             attackDelay = Math.Max(800, attackDelay);
             AttackTime = SEnvir.Now.AddMilliseconds(attackDelay);
 
+            if (BagWeight > Stats[Stat.BagWeight] || (Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
+                AttackTime += TimeSpan.FromMilliseconds(attackDelay);
+
             Poison poison = PoisonList.FirstOrDefault(x => x.Type == PoisonType.Slow);
             TimeSpan slow = TimeSpan.Zero;
             if (poison != null)
@@ -13354,9 +13318,6 @@ namespace Server.Models
                 slow = TimeSpan.FromMilliseconds(poison.Value * 100);
                 ActionTime += slow;
             }
-
-            if (BagWeight > Stats[Stat.BagWeight] || (Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
-                AttackTime += TimeSpan.FromMilliseconds(attackDelay);
 
             MagicType validMagic = MagicType.None;
             List<MagicType> magics = new List<MagicType>();
@@ -13367,8 +13328,10 @@ namespace Server.Models
 
                 if (magicObject.AttackSkill)
                 {
-                    if (Level < magicObject.Magic.Info.NeedLevel1)
+                    if (!magicObject.CanUseMagic())
+                    {
                         continue;
+                    }
 
                     var response = magicObject.AttackCast(attackMagic);
 
@@ -13390,33 +13353,7 @@ namespace Server.Models
 
             if (Equipment[(int)EquipmentSlot.Amulet]?.Info.ItemType == ItemType.DarkStone)
             {
-                foreach (KeyValuePair<Stat, int> stats in Equipment[(int)EquipmentSlot.Amulet].Info.Stats.Values)
-                {
-                    switch (stats.Key)
-                    {
-                        case Stat.FireAffinity:
-                            element = Element.Fire;
-                            break;
-                        case Stat.IceAffinity:
-                            element = Element.Ice;
-                            break;
-                        case Stat.LightningAffinity:
-                            element = Element.Lightning;
-                            break;
-                        case Stat.WindAffinity:
-                            element = Element.Wind;
-                            break;
-                        case Stat.HolyAffinity:
-                            element = Element.Holy;
-                            break;
-                        case Stat.DarkAffinity:
-                            element = Element.Dark;
-                            break;
-                        case Stat.PhantomAffinity:
-                            element = Element.Phantom;
-                            break;
-                    }
-                }
+                element = Equipment[(int)EquipmentSlot.Amulet].Info.Stats.GetAffinityElement();             
             }
 
             if (AttackLocation(Functions.Move(CurrentLocation, Direction), magics, true))
@@ -13594,6 +13531,7 @@ namespace Server.Models
             int aspeed = Stats[Stat.AttackSpeed];
             int attackDelay = Globals.AttackDelay - aspeed * Globals.ASpeedRate;
             attackDelay = Math.Max(800, attackDelay);
+            AttackTime = SEnvir.Now.AddMilliseconds(attackDelay);
 
             if (BagWeight > Stats[Stat.BagWeight] || (Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
                 AttackTime += TimeSpan.FromMilliseconds(attackDelay);
@@ -13609,8 +13547,10 @@ namespace Server.Models
             if (BagWeight > Stats[Stat.BagWeight])
                 AttackTime += TimeSpan.FromMilliseconds(attackDelay);
 
+            var front = Functions.Move(CurrentLocation, Direction);
+
             bool result = false;
-            if (CurrentMap.Info.CanMine && CurrentMap.GetCell(Functions.Move(CurrentLocation, Direction)) == null)
+            if (CurrentMap.Info.CanMine && CurrentMap.GetCell(front) == null)
             {
                 UserItem weap = Equipment[(int)EquipmentSlot.Weapon];
 
@@ -13622,12 +13562,34 @@ namespace Server.Models
                     {
                         if (SEnvir.Random.Next(info.Chance) > 0) continue;
 
+                        if (info.Region != null && !info.Region.PointList.Contains(front)) continue;
+
+                        if (info.Quantity == 0) continue;
+
+                        if (info.Quantity > 0 && info.RemainingQuantity == 0)
+                        {
+                            if (info.NextRestock > SEnvir.Now) continue;
+
+                            info.RemainingQuantity = info.Quantity;
+                        }
+
                         ItemCheck check = new ItemCheck(info.Item, 1, UserItemFlags.Bound, TimeSpan.Zero);
 
                         if (!CanGainItems(false, check)) continue;
 
                         UserItem item = SEnvir.CreateDropItem(check);
                         GainItem(item);
+
+                        if (info.Quantity > 0)
+                        {
+                            info.RemainingQuantity--;
+
+                            // sets restock time when quantity reaches zero. Unless restock time is less than zero, then never restock
+                            if (info.RemainingQuantity == 0 && info.RestockTimeInMinutes >= 0)
+                            {
+                                info.NextRestock = SEnvir.Now.AddMinutes(info.RestockTimeInMinutes);
+                            }
+                        }
                     }
 
                     bool hasRubble = false;
@@ -13701,6 +13663,94 @@ namespace Server.Models
             return result;
         }
 
+        public void RangeAttack(MirDirection direction, int delayTime, uint target)
+        {
+            UserItem weapon = Equipment[(int)EquipmentSlot.Weapon];
+
+            // shukiran
+            if (weapon is null || weapon.Info.Shape != Globals.ShurikenLibraryWeaponShape)
+                return;
+
+
+            MapObject ob = VisibleObjects.FirstOrDefault(x => x.ObjectID == target);
+
+            if (ob is null) return;
+
+
+            if (SEnvir.Now < ActionTime || SEnvir.Now < AttackTime)
+            {
+                if (!PacketWaiting)
+                {
+                    ActionList.Add(new DelayedAction(ActionTime, ActionType.RangeAttack, direction, delayTime, target));
+                    PacketWaiting = true;
+                }
+                else
+                    Enqueue(new S.UserLocation { Direction = Direction, Location = CurrentLocation });
+
+                return;
+            }
+
+            if (!CanAttack)
+            {
+                Enqueue(new S.UserLocation { Direction = Direction, Location = CurrentLocation });
+                return;
+            }
+
+            if (!CanAttackTarget(ob))
+            {
+                ob = null;
+                Enqueue(new S.UserLocation { Direction = Direction, Location = CurrentLocation });
+                return;
+            }
+
+            CombatTime = SEnvir.Now;
+
+            if (Stats[Stat.Comfort] < 15)
+                RegenTime = SEnvir.Now + RegenDelay;
+            Direction = direction;
+            ActionTime = SEnvir.Now + Globals.AttackTime;
+
+            int aspeed = Stats[Stat.AttackSpeed];
+            int attackDelay = Globals.AttackDelay - aspeed * Globals.ASpeedRate;
+            attackDelay = Math.Max(800, attackDelay);
+            AttackTime = SEnvir.Now.AddMilliseconds(attackDelay);
+
+            if (BagWeight > Stats[Stat.BagWeight] || (Poison & PoisonType.Neutralize) == PoisonType.Neutralize)
+                AttackTime += TimeSpan.FromMilliseconds(attackDelay);
+
+            Poison poison = PoisonList.FirstOrDefault(x => x.Type == PoisonType.Slow);
+            TimeSpan slow = TimeSpan.Zero;
+            if (poison != null)
+            {
+                slow = TimeSpan.FromMilliseconds(poison.Value * 100);
+                ActionTime += slow;
+            }
+
+            Direction = ob == null || ob == this ? direction : Functions.DirectionFromPoint(CurrentLocation, ob.CurrentLocation);
+
+            Element element = Functions.GetAttackElement(Stats);
+
+            if (Equipment[(int)EquipmentSlot.Amulet]?.Info.ItemType == ItemType.DarkStone)
+            {
+                element = Equipment[(int)EquipmentSlot.Amulet].Info.Stats.GetAffinityElement();      
+            }
+
+            Broadcast(new S.ObjectRangeAttack
+            {
+                ObjectID = ObjectID,
+                Direction = Direction,
+                Location = CurrentLocation,
+                AttackMagic = MagicType.Shuriken,
+                AttackElement = element,
+                Targets = new List<uint> { ob.ObjectID },
+            });
+
+            ActionList.Add(new DelayedAction(SEnvir.Now.AddMilliseconds(delayTime), ActionType.DelayAttack, ob, new List<MagicType>() { MagicType.Shuriken }, true, 50));
+
+
+            DamageItem(GridType.Equipment, (int)EquipmentSlot.Weapon);
+
+        }
         public void Attack(MapObject ob, List<MagicType> types, bool primary, int extra)
         {
             if (ob?.Node == null || ob.Dead) return;
@@ -13752,7 +13802,7 @@ namespace Server.Models
 
             foreach (MagicType type in types)
             {
-                if (!GetMagic(type, out MagicObject magicObject))
+                if (GetMagic(type, out MagicObject magicObject))
                 {
                     power = magicObject.ModifyPowerAdditionner(primary, power, ob, null, extra);
                 }
@@ -14198,6 +14248,8 @@ namespace Server.Models
                         DisplayMiss = true;
                         return 0;
                     }
+
+                    LevelMagic(magicImmunity.Magic);
                 }
             }
             else
@@ -14208,7 +14260,7 @@ namespace Server.Models
                     return 0;
                 }
 
-                if (GetMagic(MagicType.PhysicalImmunity, out PhysicalImmunity physicalImmunity) && Level >= physicalImmunity.Magic.Info.NeedLevel1)
+                if (GetMagic(MagicType.PhysicalImmunity, out PhysicalImmunity physicalImmunity))
                 {
                     power -= power * physicalImmunity.Magic.GetPower() / 100;
 
@@ -14217,6 +14269,8 @@ namespace Server.Models
                         DisplayMiss = true;
                         return 0;
                     }
+
+                    LevelMagic(physicalImmunity.Magic);
                 }
             }
 
@@ -14418,6 +14472,9 @@ namespace Server.Models
             if (Buffs.Any(x => x.Type == BuffType.Defiance) && GetMagic(MagicType.Defiance, out Defiance defiance))
                 LevelMagic(defiance.Magic);
 
+            if (GetMagic(MagicType.DefensiveMastery, out DefensiveMastery defensiveMastery))
+                LevelMagic(defensiveMastery.Magic);
+
             if (Buffs.Any(x => x.Type == BuffType.RagingWind) && GetMagic(MagicType.RagingWind, out RagingWind ragingWind))
                 LevelMagic(ragingWind.Magic);
 
@@ -14572,7 +14629,7 @@ namespace Server.Models
         {
             var hasMagic = MagicObjects.TryGetValue(type, out var retrievedMagic);
 
-            if (hasMagic && Level >= retrievedMagic.Magic.Info.NeedLevel1)
+            if (hasMagic && retrievedMagic.CanUseMagic())
             {
                 magic = (T)retrievedMagic;
                 return true;
@@ -14662,11 +14719,7 @@ namespace Server.Models
 
             if (res)
             {
-                Connection.ReceiveChat(Connection.Language.Poisoned, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.Poisoned, MessageType.System);
-
+                Connection.ReceiveChatWithObservers(con => con.Language.Poisoned, MessageType.System);
 
                 if (p.Owner != null && p.Owner.Race == ObjectType.Player)
                     ((PlayerObject)p.Owner).CheckBrown(this);
@@ -14702,6 +14755,8 @@ namespace Server.Models
 
             if (Buffs.Any(x => x.Type == BuffType.SoulResonance))
                 SoulResonance.Activate(this);
+
+            SEnvir.EventHandler.Process(this, "PLAYERDIE");
 
             #region Conquest Stats
 
@@ -14807,30 +14862,20 @@ namespace Server.Models
                     {
                         if (member.Account.Connection == null) continue;
 
-                        member.Account.Connection.ReceiveChat(string.Format(member.Account.Connection.Language.GuildWarDeath, Name, Character.Account.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.Account.GuildMember.Guild.GuildName), MessageType.System);
-
-                        foreach (SConnection con in member.Account.Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.GuildWarDeath, Name, Character.Account.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.Account.GuildMember.Guild.GuildName), MessageType.System);
-
+                        member.Account.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildWarDeath, Name, Character.Account.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.Account.GuildMember.Guild.GuildName), MessageType.System);
                     }
                     foreach (GuildMemberInfo member in attacker.Character.Account.GuildMember.Guild.Members)
                     {
                         if (member.Account.Connection == null) continue;
 
-                        member.Account.Connection.ReceiveChat(string.Format(member.Account.Connection.Language.GuildWarDeath, Name, Character.Account.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.Account.GuildMember.Guild.GuildName), MessageType.System);
-
-                        foreach (SConnection con in member.Account.Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.GuildWarDeath, Name, Character.Account.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.Account.GuildMember.Guild.GuildName), MessageType.System);
+                        member.Account.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.GuildWarDeath, Name, Character.Account.GuildMember.Guild.GuildName, attacker.Name, attacker.Character.Account.GuildMember.Guild.GuildName), MessageType.System);
                     }
                 }
                 else
                 {
                     if (Stats[Stat.PKPoint] < Config.RedPoint && Stats[Stat.Brown] == 0)
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.MurderedBy, attacker.Name), MessageType.System);
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.MurderedBy, attacker.Name), MessageType.System);
-
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.MurderedBy, attacker.Name), MessageType.System);
 
                         //PvP death
 
@@ -14848,28 +14893,20 @@ namespace Server.Models
 
                             attacker.BuffAdd(BuffType.PvPCurse, time, new Stats { [Stat.Luck] = rate }, false, false, TimeSpan.Zero);
 
-                            attacker.Connection.ReceiveChat(string.Format(attacker.Connection.Language.Curse, Name), MessageType.System);
-                            foreach (SConnection con in attacker.Connection.Observers)
-                                con.ReceiveChat(string.Format(con.Language.Murdered, Name), MessageType.System);
+                            attacker.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.Curse, Name), MessageType.System);
                         }
                         else
                         {
-                            attacker.Connection.ReceiveChat(string.Format(attacker.Connection.Language.Murdered, Name), MessageType.System);
-                            foreach (SConnection con in attacker.Connection.Observers)
-                                con.ReceiveChat(string.Format(con.Language.Murdered, Name), MessageType.System);
+                            attacker.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.Murdered, Name), MessageType.System);
                         }
 
                         attacker.IncreasePKPoints(Config.PKPointRate);
                     }
                     else
                     {
-                        attacker.Connection.ReceiveChat(attacker.Connection.Language.Protected, MessageType.System);
-                        foreach (SConnection con in attacker.Connection.Observers)
-                            con.ReceiveChat(con.Language.Protected, MessageType.System);
+                        attacker.Connection.ReceiveChatWithObservers(con => con.Language.Protected, MessageType.System);
 
-                        Connection.ReceiveChat(string.Format(Connection.Language.Killed, attacker.Name), MessageType.System);
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.Killed, attacker.Name), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.Killed, attacker.Name), MessageType.System);
                     }
                 }
             }
@@ -14893,10 +14930,7 @@ namespace Server.Models
                     }
                 }
 
-                Connection.ReceiveChat(Connection.Language.Died, MessageType.System);
-
-                foreach (SConnection con in Connection.Observers)
-                    con.ReceiveChat(con.Language.Died, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.Died, MessageType.System);
             }
 
             if (Stats[Stat.DeathDrops] > 0)
@@ -15310,6 +15344,46 @@ namespace Server.Models
             Broadcast(p);
         }
 
+        public override void SetHP(int amount)
+        {
+            if (Superman)
+            {
+                CurrentHP = Stats[Stat.Health];
+                return;
+            }
+            base.SetHP(amount);
+        }
+
+        public override void ChangeHP(int amount)
+        {
+            if (Superman)
+            {
+                CurrentHP = Stats[Stat.Health];
+                return;
+            }
+            base.ChangeHP(amount);
+        }
+
+        public override void SetMP(int amount)
+        {
+            if (Superman)
+            {
+                CurrentMP = Stats[Stat.Mana];
+                return;
+            }
+            base.SetMP(amount);
+        }
+
+        public override void ChangeMP(int amount)
+        {
+            if (Superman)
+            {
+                CurrentMP = Stats[Stat.Mana];
+                return;
+            }
+            base.ChangeMP(amount);
+        }
+
         #region Instance / Dungeon Finder
 
         public void JoinInstance(C.JoinInstance p)
@@ -15374,11 +15448,11 @@ namespace Server.Models
             Enqueue(joinResult);
         }
 
-        public (byte? index, InstanceResult result) GetInstance(InstanceInfo instance, bool checkOnly = false, bool dungeonFinder = false)
+        public (byte? index, InstanceResult result) GetInstance(InstanceInfo instance, bool checkOnly = false, bool dungeonFinder = false, bool walkOn = false)
         {
             var mapInstance = SEnvir.Instances[instance];
 
-            if (instance.ConnectRegion == null)
+            if (instance.ConnectRegion == null && !walkOn)
                 return (null, InstanceResult.ConnectRegionNotSet);
 
             if (instance.MinPlayerLevel > 0 && Level < instance.MinPlayerLevel || instance.MaxPlayerLevel > 0 && Level > instance.MaxPlayerLevel)
@@ -15392,7 +15466,7 @@ namespace Server.Models
 
             switch (instance.Type)
             {
-                case InstanceType.Solo:
+                case InstanceType.Player:
                     {
                         if (instance.UserCooldown.TryGetValue(Name, out DateTime cooldown))
                         {
@@ -15409,7 +15483,7 @@ namespace Server.Models
                                 return (instance.UserRecord[Name], InstanceResult.Success);
                         }
 
-                        for (int i = 0; i < mapInstance.Length; i++)
+                        for (byte i = 0; i < mapInstance.Length; i++)
                         {
                             if (CheckInstanceFreeSpace(instance, i))
                             {
@@ -15417,15 +15491,15 @@ namespace Server.Models
                                 {
                                     if (instance.UserRecord.ContainsKey(Name))
                                     {
-                                        instance.UserRecord[Name] = (byte)i;
+                                        instance.UserRecord[Name] = i;
                                     }
                                     else
                                     {
-                                        instance.UserRecord.Add(Name, (byte)i);
+                                        instance.UserRecord.Add(Name, i);
                                     }
                                 }
 
-                                return ((byte)i, InstanceResult.Success);
+                                return (i, InstanceResult.Success);
                             }
                         }
                     }
@@ -15507,14 +15581,53 @@ namespace Server.Models
                         }
                     }
                     break;
+                case InstanceType.Castle:
+                    {
+                        if (Character.Account.GuildMember == null)
+                            return (null, InstanceResult.NotInGuild);
+
+                        var castle = Character.Account.GuildMember.Guild.Castle;
+
+                        if (Character.Account.GuildMember.Guild.Castle == null)
+                            return (null, InstanceResult.NotInGuild);
+
+                        if (instance.GuildCooldown.TryGetValue(Character.Account.GuildMember.Guild.GuildName, out DateTime cooldown))
+                        {
+                            if (cooldown > SEnvir.Now)
+                                return (null, InstanceResult.GuildCooldown);
+
+                            if (!checkOnly)
+                                instance.GuildCooldown.Remove(Character.Account.GuildMember.Guild.GuildName);
+                        }
+
+                        foreach (GuildMemberInfo member in Character.Account.GuildMember.Guild.Members)
+                        {
+                            if (member.Account.Connection?.Player?.CurrentMap.Instance == instance)
+                            {
+                                var sequence = member.Account.Connection.Player.CurrentMap.InstanceSequence;
+
+                                if (CheckInstanceFreeSpace(instance, sequence))
+                                    return (sequence, InstanceResult.Success);
+
+                                return (sequence, InstanceResult.Invalid);
+                            }
+                        }
+
+                        if (instance.UserRecord.ContainsKey(Name))
+                        {
+                            if (CheckInstanceFreeSpace(instance, instance.UserRecord[Name]))
+                                return (instance.UserRecord[Name], InstanceResult.Success);
+                        }
+                    }
+                    break;
             }
 
             byte? instanceSequence = null;
-            for (int i = 0; i < mapInstance.Length; i++)
+            for (byte i = 0; i < mapInstance.Length; i++)
             {
                 if (mapInstance[i] == null)
                 {
-                    instanceSequence = (byte)i;
+                    instanceSequence = i;
                     break;
                 }
             }
@@ -15603,124 +15716,84 @@ namespace Server.Models
             {
                 case InstanceResult.Invalid:
                     {
-                        Connection.ReceiveChat(Connection.Language.InstanceInvalid, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.InstanceInvalid, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceInvalid, MessageType.System);
                     }
                     break;
                 case InstanceResult.InsufficientLevel:
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.InstanceInsufficientLevel, instance.MinPlayerLevel, instance.MaxPlayerLevel), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.InstanceInsufficientLevel, instance.MinPlayerLevel, instance.MaxPlayerLevel), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceInsufficientLevel, instance.MinPlayerLevel, instance.MaxPlayerLevel), MessageType.System);
                     }
                     break;
                 case InstanceResult.SafeZoneOnly:
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.InstanceSafeZoneOnly, instance.MinPlayerLevel, instance.MaxPlayerLevel), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.InstanceSafeZoneOnly, instance.MinPlayerLevel, instance.MaxPlayerLevel), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceSafeZoneOnly, instance.MinPlayerLevel, instance.MaxPlayerLevel), MessageType.System);
                     }
                     break;
                 case InstanceResult.NotInGroup:
                     {
-                        Connection.ReceiveChat(Connection.Language.InstanceNotInGroup, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.InstanceNotInGroup, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceNotInGroup, MessageType.System);
                     }
                     break;
                 case InstanceResult.NotInGuild:
                     {
-                        Connection.ReceiveChat(Connection.Language.InstanceNotInGuild, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.InstanceNotInGuild, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceNotInGuild, MessageType.System);
+                    }
+                    break;
+                case InstanceResult.NotInCastle:
+                    {
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceNotInCastle, MessageType.System);
                     }
                     break;
                 case InstanceResult.TooFewInGroup:
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.InstanceTooFewInGroup, instance.MinPlayerCount), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.InstanceTooFewInGroup, instance.MinPlayerCount), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceTooFewInGroup, instance.MinPlayerCount), MessageType.System);
                     }
                     break;
                 case InstanceResult.TooManyInGroup:
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.InstanceTooManyInGroup, instance.MaxPlayerCount), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.InstanceTooManyInGroup, instance.MaxPlayerCount), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceTooManyInGroup, instance.MaxPlayerCount), MessageType.System);
                     }
                     break;
                 case InstanceResult.ConnectRegionNotSet:
                     {
-                        Connection.ReceiveChat(Connection.Language.InstanceConnectRegionNotSet, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.InstanceConnectRegionNotSet, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceConnectRegionNotSet, MessageType.System);
                     }
                     break;
                 case InstanceResult.NoSlots:
                     {
-                        Connection.ReceiveChat(Connection.Language.InstanceNoSlots, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.InstanceNoSlots, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceNoSlots, MessageType.System);
                     }
                     break;
                 case InstanceResult.NoRejoin:
                     {
-                        Connection.ReceiveChat(Connection.Language.InstanceNoRejoin, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.InstanceNoRejoin, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceNoRejoin, MessageType.System);
                     }
                     break;
                 case InstanceResult.MissingItem:
                     {
-                        Connection.ReceiveChat(string.Format(Connection.Language.InstanceMissingItem, instance.RequiredItem.ItemName), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.InstanceMissingItem, instance.RequiredItem.ItemName), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceMissingItem, instance.RequiredItem.ItemName), MessageType.System);
                     }
                     break;
                 case InstanceResult.UserCooldown:
                     {
                         var cooldown = instance.UserCooldown[Name];
-                        Connection.ReceiveChat(string.Format(Connection.Language.InstanceUserCooldown, cooldown), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.InstanceUserCooldown, cooldown), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceUserCooldown, cooldown), MessageType.System);
                     }
                     break;
                 case InstanceResult.GuildCooldown:
                     {
                         var cooldown = instance.GuildCooldown[Character.Account.GuildMember.Guild.GuildName];
-                        Connection.ReceiveChat(string.Format(Connection.Language.InstanceGuildCooldown, cooldown), MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(string.Format(con.Language.InstanceGuildCooldown, cooldown), MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => string.Format(con.Language.InstanceGuildCooldown, cooldown), MessageType.System);
                     }
                     break;
                 case InstanceResult.NotGroupLeader:
                     {
-                        Connection.ReceiveChat(Connection.Language.InstanceNotGroupLeader, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.InstanceNotGroupLeader, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceNotGroupLeader, MessageType.System);
                     }
                     break;
                 case InstanceResult.NoMap:
                     {
-                        Connection.ReceiveChat(Connection.Language.InstanceNoMap, MessageType.System);
-
-                        foreach (SConnection con in Connection.Observers)
-                            con.ReceiveChat(con.Language.InstanceNoMap, MessageType.System);
+                        Connection.ReceiveChatWithObservers(con => con.Language.InstanceNoMap, MessageType.System);
                     }
                     break;
             }
@@ -15763,9 +15836,7 @@ namespace Server.Models
 
                 if (sendMessage && clientInfo.State == OnlineState.Online)
                 {
-                    info.Character.Player.Connection.ReceiveChat(string.Format(info.Character.Player.Connection.Language.FriendStateChanged, clientInfo.Name, clientInfo.State), MessageType.System);
-                    foreach (SConnection con in info.Character.Player.Connection.Observers)
-                        con.ReceiveChat(string.Format(con.Language.FriendStateChanged, clientInfo.Name, clientInfo.State), MessageType.System);
+                    info.Character.Player.Connection.ReceiveChatWithObservers(con => string.Format(con.Language.FriendStateChanged, clientInfo.Name, clientInfo.State), MessageType.System);
                 }
             }
         }
@@ -15795,19 +15866,19 @@ namespace Server.Models
 
             if (nextLevel == null)
             {
-                Connection.ReceiveChat(Connection.Language.DisciplineMaxLevel, MessageType.System);
+                Connection.ReceiveChatWithObservers(con => con.Language.DisciplineMaxLevel, MessageType.System);
                 return;
             }
 
             if (Level < nextLevel.RequiredLevel)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.DisciplineRequiredLevel, nextLevel.RequiredLevel), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.DisciplineRequiredLevel, nextLevel.RequiredLevel), MessageType.System);
                 return;
             }
 
             if (Gold.Amount < nextLevel.RequiredGold)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.DisciplineRequiredGold, nextLevel.RequiredGold), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.DisciplineRequiredGold, nextLevel.RequiredGold), MessageType.System);
                 return;
             }
 
@@ -15815,7 +15886,7 @@ namespace Server.Models
 
             if (currentExp < nextLevel.RequiredExperience)
             {
-                Connection.ReceiveChat(string.Format(Connection.Language.DisciplineRequiredExp, nextLevel.RequiredExperience), MessageType.System);
+                Connection.ReceiveChatWithObservers(con => string.Format(con.Language.DisciplineRequiredExp, nextLevel.RequiredExperience), MessageType.System);
                 return;
             }
 
@@ -15861,5 +15932,4 @@ namespace Server.Models
 
         #endregion
     }
-
 }
